@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Alistar<codingbulder@gmail.com>"]
 description = "Rust Nexus Uploader - Upload packages to Nexus repository"
 license = "Apache-2.0"
-repository = "https://github.com/your-username/rnu"
+repository = "https://github.com/it-coder/rnu"
 keywords = ["nexus", "npm", "upload", "cli", "repository"]
 categories = ["command-line-utilities", "development-tools"]
 
