@@ -1,0 +1,26 @@
+{
+  "default_server": "http://localhost:8081",
+  "default_repository": "npm-hosted",
+  "profiles": {
+    "local": {
+      "server": "http://localhost:8081",
+      "repository": "npm-hosted",
+      "user": "admin"
+    },
+    "development": {
+      "server": "http://dev-nexus.company.com:8081",
+      "repository": "npm-hosted",
+      "user": "dev-user"
+    },
+    "staging": {
+      "server": "https://staging-nexus.company.com",
+      "repository": "npm-private",
+      "user": "staging-deploy"
+    },
+    "production": {
+      "server": "https://nexus.company.com",
+      "repository": "npm-private",
+      "user": "prod-deploy"
+    }
+  }
+}
