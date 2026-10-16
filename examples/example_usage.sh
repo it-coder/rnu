@@ -21,95 +21,97 @@ else
     NEXUS_UPLOAD="../target/release/nexus-upload"
 fi
 
-# Example 1: Initialize configuration
+# ── Configuration Management ───────────────────────────────────────
+
 echo -e "${GREEN}Example 1: Initialize configuration${NC}"
 echo "Command: $NEXUS_UPLOAD config init"
 echo "Description: Creates a sample configuration file with default profiles"
 echo
 
-# Example 2: Show current configuration
 echo -e "${GREEN}Example 2: Show current configuration${NC}"
 echo "Command: $NEXUS_UPLOAD config show"
 echo "Description: Displays the current configuration file content"
 echo
 
-# Example 3: List available profiles
 echo -e "${GREEN}Example 3: List available profiles${NC}"
 echo "Command: $NEXUS_UPLOAD config list"
 echo "Description: Shows all configured profiles"
 echo
 
-# Example 4: Add a new profile
 echo -e "${GREEN}Example 4: Add a new profile${NC}"
 echo "Command: $NEXUS_UPLOAD config add staging --server https://staging-nexus.company.com --repository npm-hosted --user deploy"
 echo "Description: Adds a new profile named 'staging'"
 echo
 
-# Example 5: Basic upload with command line arguments
-echo -e "${GREEN}Example 5: Basic upload with CLI arguments${NC}"
+# ── npm Upload ─────────────────────────────────────────────────────
+
+echo -e "${YELLOW}=== npm Upload Examples ===${NC}\n"
+
+echo -e "${GREEN}Example 5: Basic npm upload${NC}"
 echo "Command: $NEXUS_UPLOAD -s http://localhost:8081 -u admin -p password123 npm ./my-project"
 echo "Description: Upload packages from './my-project/node_modules' to local Nexus"
 echo
 
-# Example 6: Upload using a profile
-echo -e "${GREEN}Example 6: Upload using a profile${NC}"
+echo -e "${GREEN}Example 6: npm upload with profile${NC}"
 echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project"
-echo "Description: Use the 'local' profile configuration for server and user settings"
+echo "Description: Use the 'local' profile for server and user settings"
 echo
 
-# Example 7: Upload directly from node_modules
-echo -e "${GREEN}Example 7: Upload directly from node_modules${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project/node_modules"
-echo "Description: Directly specify the node_modules directory"
+echo -e "${GREEN}Example 7: npm — skip existing + concurrency${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --skip-existing -c 8"
+echo "Description: Skip existing packages, upload with 8 concurrent workers"
 echo
 
-# Example 8: Skip existing packages
-echo -e "${GREEN}Example 8: Skip existing packages${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --skip-existing"
-echo "Description: Skip packages that already exist in the repository"
-echo
-
-# Example 9: Verbose output
-echo -e "${GREEN}Example 9: Verbose output${NC}"
+echo -e "${GREEN}Example 8: npm — verbose mode${NC}"
 echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --skip-existing -v"
-echo "Description: Enable detailed logging to see what's happening"
+echo "Description: Enable INFO-level tracing to see scan / upload progress"
 echo
 
-# Example 10: Dry run mode
-echo -e "${GREEN}Example 10: Dry run mode${NC}"
+echo -e "${GREEN}Example 9: npm — dry-run${NC}"
 echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --dry-run"
-echo "Description: Show what would be uploaded without actually uploading"
+echo "Description: Preview what would be uploaded without actually uploading"
 echo
 
-# Example 11: Upload only specific packages
-echo -e "${GREEN}Example 11: Upload only specific packages${NC}"
+echo -e "${GREEN}Example 10: npm — only specific packages${NC}"
 echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --only \"lodash,express,react\""
-echo "Description: Only upload packages containing 'lodash', 'express', or 'react'"
+echo "Description: Only upload packages matching lodash, express, or react"
 echo
 
-# Example 12: Exclude specific packages
-echo -e "${GREEN}Example 12: Exclude specific packages${NC}"
+echo -e "${GREEN}Example 11: npm — exclude packages${NC}"
 echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --exclude \"test,mock,jest\""
-echo "Description: Exclude packages containing 'test', 'mock', or 'jest' in their names"
+echo "Description: Exclude test/mock/jest packages"
 echo
 
-# Example 13: Complex filtering
-echo -e "${GREEN}Example 13: Complex filtering${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --skip-existing --only \"@types,lodash\" --exclude \"test\" -v"
-echo "Description: Upload only @types and lodash packages, exclude test packages, skip existing ones, with verbose output"
+echo -e "${GREEN}Example 12: npm — complex filtering${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 npm ./my-project --skip-existing --only \"@types,lodash\" --exclude \"test\" -c 4 -v"
+echo "Description: Upload @types and lodash, exclude test, skip existing, 4 workers, verbose"
 echo
 
-# Example 14: Different repository
-echo -e "${GREEN}Example 14: Upload to different repository${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -r npm-snapshots -p password123 npm ./my-project"
-echo "Description: Upload to 'npm-snapshots' repository instead of the default"
+# ── Maven Upload ───────────────────────────────────────────────────
+
+echo -e "${YELLOW}=== Maven Upload Examples ===${NC}\n"
+
+echo -e "${GREEN}Example 13: Maven — upload target directory${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 -r maven-releases maven ./target"
+echo "Description: Scan ./target for .pom + .jar files and upload to maven-releases"
 echo
 
-# Example 15: Custom configuration file
-echo -e "${GREEN}Example 15: Use custom configuration file${NC}"
-echo "Command: $NEXUS_UPLOAD --config ./custom-config.json --profile production -p password123 npm ./my-project"
-echo "Description: Use a custom configuration file instead of the default one"
+echo -e "${GREEN}Example 14: Maven — from local repository${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 maven ~/.m2/repository --skip-existing -c 4"
+echo "Description: Scan local Maven repository, skip existing artifacts, 4 concurrent uploads"
 echo
+
+echo -e "${GREEN}Example 15: Maven — filter by artifactId${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 -r maven-releases maven ./target --only \"my-app,my-lib\""
+echo "Description: Only upload artifacts whose artifactId contains my-app or my-lib"
+echo
+
+echo -e "${GREEN}Example 16: Maven — dry-run preview${NC}"
+echo "Command: $NEXUS_UPLOAD --profile local -p password123 maven ./target --dry-run -v"
+echo "Description: Scan and show what Maven artifacts would be uploaded"
+echo
+
+# ── Common Use Cases ───────────────────────────────────────────────
 
 echo -e "${YELLOW}=== Common Use Cases ===${NC}\n"
 
@@ -121,39 +123,44 @@ nexus-upload config init
 # 2. Add your environment profile
 nexus-upload config add myenv --server https://nexus.mycompany.com --repository npm-private --user myuser
 
-# 3. Test with dry run
+# 3. Test with dry run (npm)
 nexus-upload --profile myenv -p mypassword npm ./my-project --dry-run
 
-# 4. Upload with skip existing
-nexus-upload --profile myenv -p mypassword npm ./my-project --skip-existing
+# 4. Upload with skip existing + concurrency
+nexus-upload --profile myenv -p mypassword npm ./my-project --skip-existing -c 8
 EOF
 echo
 
-echo -e "${BLUE}Use Case 2: Offline environment deployment${NC}"
+echo -e "${BLUE}Use Case 2: Offline environment deployment (npm)${NC}"
 cat << 'EOF'
 # 1. Scan and show what would be uploaded
 nexus-upload --profile production -p password npm ./offline-project --dry-run -v
 
-# 2. Upload only production dependencies
-nexus-upload --profile production -p password npm ./offline-project --exclude "test,dev,mock"
+# 2. Upload production dependencies only
+nexus-upload --profile production -p password npm ./offline-project --exclude "test,dev,mock" -c 8
 
-# 3. Upload remaining packages if needed
+# 3. Upload remaining packages
 nexus-upload --profile production -p password npm ./offline-project --skip-existing
 EOF
 echo
 
-echo -e "${BLUE}Use Case 3: Selective package upload${NC}"
+echo -e "${BLUE}Use Case 3: Maven build output upload${NC}"
 cat << 'EOF'
-# 1. Upload only framework packages
-nexus-upload --profile local -p password npm ./project --only "react,vue,angular"
+# 1. Build your project
+mvn clean package
 
-# 2. Upload only utility packages
-nexus-upload --profile local -p password npm ./project --only "lodash,moment,axios"
+# 2. Preview upload
+nexus-upload --profile nexus -p $PASSWORD -r maven-releases maven ./target --dry-run
 
-# 3. Upload everything except development tools
-nexus-upload --profile local -p password npm ./project --exclude "eslint,jest,webpack,babel"
+# 3. Upload with concurrency
+nexus-upload --profile nexus -p $PASSWORD -r maven-releases maven ./target -c 8
+
+# 4. Upload snapshots
+nexus-upload --profile nexus -p $PASSWORD -r maven-snapshots maven ./target --skip-existing
 EOF
 echo
+
+# ── Security Best Practices ────────────────────────────────────────
 
 echo -e "${YELLOW}=== Security Best Practices ===${NC}\n"
 
@@ -167,22 +174,25 @@ echo "   read -s NEXUS_PASSWORD"
 echo "   nexus-upload --profile prod -p \$NEXUS_PASSWORD npm ./project"
 echo
 
+# ── Troubleshooting ────────────────────────────────────────────────
+
 echo -e "${YELLOW}=== Troubleshooting ===${NC}\n"
 
 echo "1. Connection issues:"
-echo "   - Use -v flag for verbose output"
+echo "   - Use -v flag for verbose output (INFO level)"
+echo "   - Use RUST_LOG=debug for detailed diagnostics"
 echo "   - Check server URL and network connectivity"
-echo "   - Verify credentials"
 echo
 echo "2. Package not found errors:"
-echo "   - Ensure node_modules contains the packages"
-echo "   - Check that package.json files are present"
-echo "   - Use --dry-run to see what packages are detected"
+echo "   - npm: ensure node_modules contains package.json files"
+echo "   - Maven: ensure target/ contains .pom and .jar files"
+echo "   - Use --dry-run to see what is detected"
 echo
 echo "3. Upload failures:"
-echo "   - Check repository permissions"
-echo "   - Verify repository name is correct"
-echo "   - Use --skip-existing to avoid duplicate errors"
+echo "   - Check repository permissions (401 = auth, 403 = permission)"
+echo "   - Verify repository name matches Nexus configuration"
+echo "   - Use --skip-existing to avoid 409 conflicts"
+echo "   - Reduce concurrency with -c 1 to isolate issues"
 echo
 
 echo -e "${GREEN}For more information, run: $NEXUS_UPLOAD --help${NC}"

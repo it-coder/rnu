@@ -130,6 +130,110 @@ pub fn get_default_config_file() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("config.json"))
 }
 
+/// Merges CLI args, profile, and config defaults into a final Config.
+/// Priority: CLI > profile > config defaults > built-in defaults.
+pub struct ConfigResolver;
+
+impl ConfigResolver {
+    pub fn resolve(
+        cli_server: Option<&str>,
+        cli_user: Option<&str>,
+        cli_password: &str,
+        cli_repository: Option<&str>,
+        cli_profile: Option<&str>,
+        cli_verbose: bool,
+        cli_dry_run: bool,
+        config_file: &ConfigFile,
+    ) -> Result<Config> {
+        let server = Self::resolve_server(cli_server, cli_profile, config_file)?;
+        let repository = Self::resolve_repository(cli_repository, cli_profile, config_file);
+        let user = Self::resolve_user(cli_user, cli_profile, config_file)?;
+
+        Ok(Config::new(
+            server,
+            user,
+            cli_password.to_string(),
+            repository,
+            cli_verbose,
+            cli_dry_run,
+        ))
+    }
+
+    fn resolve_server(
+        cli_server: Option<&str>,
+        cli_profile: Option<&str>,
+        config_file: &ConfigFile,
+    ) -> Result<String> {
+        if let Some(server) = cli_server {
+            return Ok(server.to_string());
+        }
+        if let Some(profile_name) = cli_profile {
+            return config_file
+                .get_profile(profile_name)
+                .map(|p| p.server.clone())
+                .ok_or_else(|| {
+                    RnuError::ConfigError(format!(
+                        "Profile '{}' not found in configuration file",
+                        profile_name
+                    ))
+                });
+        }
+        config_file
+            .default_server
+            .clone()
+            .ok_or_else(|| {
+                RnuError::ConfigError(
+                    "Server URL must be specified via --server, --profile, or default_server in config file"
+                        .to_string(),
+                )
+            })
+    }
+
+    fn resolve_repository(
+        cli_repository: Option<&str>,
+        cli_profile: Option<&str>,
+        config_file: &ConfigFile,
+    ) -> String {
+        if let Some(repo) = cli_repository {
+            return repo.to_string();
+        }
+        if let Some(profile_name) = cli_profile {
+            if let Some(profile) = config_file.get_profile(profile_name) {
+                if let Some(repo) = &profile.repository {
+                    return repo.clone();
+                }
+            }
+        }
+        config_file
+            .default_repository
+            .clone()
+            .unwrap_or_else(|| "npm-hosted".to_string())
+    }
+
+    fn resolve_user(
+        cli_user: Option<&str>,
+        cli_profile: Option<&str>,
+        config_file: &ConfigFile,
+    ) -> Result<String> {
+        if let Some(user) = cli_user {
+            return Ok(user.to_string());
+        }
+        if let Some(profile_name) = cli_profile {
+            if let Some(profile) = config_file.get_profile(profile_name) {
+                if let Some(user) = &profile.user {
+                    return Ok(user.clone());
+                }
+            }
+            return Err(RnuError::ConfigError(
+                "Username must be specified via --user or in the profile".to_string(),
+            ));
+        }
+        Err(RnuError::ConfigError(
+            "Username must be specified via --user or --profile".to_string(),
+        ))
+    }
+}
+
 pub fn create_sample_config() -> ConfigFile {
     let mut profiles = std::collections::HashMap::new();
 

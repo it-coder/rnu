@@ -27,24 +27,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Formats duration into human readable format
-pub fn format_duration(duration: std::time::Duration) -> String {
-    let total_seconds = duration.as_secs();
-
-    if total_seconds < 60 {
-        format!("{}s", total_seconds)
-    } else if total_seconds < 3600 {
-        let minutes = total_seconds / 60;
-        let seconds = total_seconds % 60;
-        format!("{}m {}s", minutes, seconds)
-    } else {
-        let hours = total_seconds / 3600;
-        let minutes = (total_seconds % 3600) / 60;
-        let seconds = total_seconds % 60;
-        format!("{}h {}m {}s", hours, minutes, seconds)
-    }
-}
-
 /// Prompts user for confirmation
 pub fn confirm_prompt(message: &str) -> io::Result<bool> {
     print!("{} [y/N]: ", message);
@@ -130,15 +112,6 @@ mod tests {
         assert_eq!(format_bytes(1024), "1.0 KB");
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(1048576), "1.0 MB");
-    }
-
-    #[test]
-    fn test_format_duration() {
-        use std::time::Duration;
-
-        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
-        assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
-        assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m 1s");
     }
 
     #[test]
