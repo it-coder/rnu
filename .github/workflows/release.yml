@@ -15,7 +15,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # 每个平台在自己原生 runner 上构建，不使用本机交叉工具链
   RUST_BACKTRACE: 1
 
 jobs:
@@ -58,7 +57,7 @@ jobs:
         include:
           - { os: macos-14,      target: aarch64-apple-darwin,       cross: false }
           - { os: macos-14,      target: x86_64-apple-darwin,        cross: false }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,  cross: false }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,  cross: true  }
           - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: true  }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    cross: false }
     steps:
@@ -68,7 +67,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # aarch64-musl 用 cross（内部起 Docker），其余用原生 cargo
+      # Linux musl 目标统一走 cross：runner 上没有 musl 专用的 C 工具链，
+      # ring（rustls 的加密后端）编译 C 代码时会找 x86_64-linux-musl-gcc 而失败。
+      # cross 的镜像里自带 musl-gcc / 链接器，环境由镜像保证。
       - if: matrix.cross
         uses: taiki-e/install-action@cross
 
@@ -93,9 +94,52 @@ jobs:
         shell: bash
         run: |
           bin="$(find dist -name 'nexus-upload*' -type f | head -n1)"
-          echo "运行 $bin"
+          [ -n "$bin" ] || { echo "::error::未找到可执行文件"; exit 1; }
+          # cross 在容器内构建，产物可能属 root，chmod 失败不影响后续读取
+          chmod +x "$bin" 2>/dev/null || true
+          echo "产物: $bin"
+
+          target="${{ matrix.target }}"
+          case "$target" in
+            aarch64-*) tarch=aarch64 ;;
+            x86_64-*)  tarch=x86_64  ;;
+            *)         tarch=unknown ;;
+          esac
+          host_arch="$(uname -m)"
+          [ "$host_arch" = "arm64" ] && host_arch=aarch64
+
+          # 交叉架构的产物无法在当前 runner 上执行，改为校验文件架构
+          if [ "$tarch" != "$host_arch" ]; then
+            echo "跨架构产物（${target} @ ${host_arch}），跳过执行，校验文件架构"
+            info="$(file -b "$bin")"
+            echo "$info"
+            case "$tarch" in
+              aarch64) expect='aarch64|arm64'  ;;
+              x86_64)  expect='x86-64|x86_64'  ;;
+              *)       expect='.'              ;;
+            esac
+            if ! printf '%s' "$info" | grep -qE "$expect"; then
+              echo "::error::产物架构与目标 ${target} 不符"
+              exit 1
+            fi
+            exit 0
+          fi
+
           "$bin" --version
           "$bin" --help > /dev/null
+
+          # musl 包必须是静态链接，不依赖任何动态库
+          # 用 file 判定：新版 glibc 的 ldd 对静态包输出「statically linked」而非
+          # 「not a dynamic executable」，grep ldd 会误判
+          if [ "${target#*musl}" != "$target" ]; then
+            if file "$bin" | grep -q "statically linked"; then
+              echo "静态链接校验通过"
+            else
+              echo "::error::musl 产物不是静态链接"
+              file "$bin"
+              exit 1
+            fi
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -109,6 +153,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts

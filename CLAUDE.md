@@ -30,7 +30,7 @@
 
 **跨平台构建要点：**
 - 代码本身无平台分支：路径统一 `PathBuf`，配置目录用 `dirs::config_dir()`
-- 正式产物由 `.github/workflows/release.yml` 在 5 个原生 runner 上构建，不依赖本机交叉工具链
+- 正式产物由 `.github/workflows/release.yml` 在 5 个平台上构建（Linux musl 两个目标走 `cross` 容器，因为 `ring` 需要 musl 专用 C 交叉编译器），不依赖本机交叉工具链
 - `.cargo/config.toml` 为 Windows（msvc/gnu）与 Linux musl 目标开启 `crt-static`，产物自包含
 - 本机能直接打的只有 macOS 两个 arch；Linux/Windows 请走 CI
 

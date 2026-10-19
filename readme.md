@@ -243,11 +243,13 @@ git tag v0.2.0 && git push origin v0.2.0
 |---|---|---|
 | `macos-14` | `aarch64-apple-darwin` | 原生 |
 | `macos-14` | `x86_64-apple-darwin` | 交叉（同一工具链，无需额外依赖） |
-| `ubuntu-latest` | `x86_64-unknown-linux-musl` | 原生 + musl 静态 |
-| `ubuntu-latest` | `aarch64-unknown-linux-musl` | `cross`（内部起 Docker） |
+| `ubuntu-latest` | `x86_64-unknown-linux-musl` | `cross`（镜像自带 musl 工具链） |
+| `ubuntu-latest` | `aarch64-unknown-linux-musl` | `cross`（同上） |
 | `windows-latest` | `x86_64-pc-windows-msvc` | 原生，静态链接 CRT |
 
-每个 job 都会跑一遍 `nexus-upload --version` 冒烟测试，最后统一生成 `SHA256SUMS` 并上传。手动触发（`workflow_dispatch`）只构建、不发布。
+每个 job 都会跑一遍冒烟测试（`--version` / `--help`；跨架构产物改为校验文件格式），musl 包额外确认是静态链接，最后统一生成 `SHA256SUMS` 并上传。手动触发（`workflow_dispatch`）只构建、不发布。
+
+> **为什么 Linux 走 cross**：`ring`（rustls 的加密后端）要编译 C 代码，musl 目标需要 `x86_64-linux-musl-gcc` 这类专用交叉编译器，runner 上并没有。`cross` 的容器镜像里自带全套 musl 工具链，省去逐个目标配 `CC` / 链接器。若本机不想用 Docker，也可以 `apt install musl-tools` 后设置 `CC_x86_64_unknown_linux_musl=musl-gcc`。
 
 > **关于 TLS**：`reqwest` 已切换到 `rustls-tls-native-roots`，不再依赖 OpenSSL，交叉编译不会卡在目标平台的 `libssl` 上；同时仍读取系统信任库，内网 Nexus 的自签 CA 照常有效。
 
