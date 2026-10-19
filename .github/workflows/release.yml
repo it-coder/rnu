@@ -130,9 +130,10 @@ jobs:
 
           # musl 包必须是静态链接，不依赖任何动态库
           # 用 file 判定：新版 glibc 的 ldd 对静态包输出「statically linked」而非
-          # 「not a dynamic executable」，grep ldd 会误判
+          # 「not a dynamic executable」；而 Rust 在 crt-static 下产出的是静态 PIE，
+          # file 报「static-pie linked」—— 同样是自包含的，无 PT_INTERP
           if [ "${target#*musl}" != "$target" ]; then
-            if file "$bin" | grep -q "statically linked"; then
+            if file -b "$bin" | grep -qE 'statically linked|static-pie linked'; then
               echo "静态链接校验通过"
             else
               echo "::error::musl 产物不是静态链接"
