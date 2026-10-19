@@ -171,7 +171,10 @@ impl NexusClient {
             urlencoding::encode(version),
         );
 
-        debug!("Checking Maven existence: {}:{}:{}", group_id, artifact_id, version);
+        debug!(
+            "Checking Maven existence: {}:{}:{}",
+            group_id, artifact_id, version
+        );
 
         let response = self
             .http
@@ -189,7 +192,9 @@ impl NexusClient {
         } else if response.status().as_u16() == 404 {
             Ok(false)
         } else if response.status().as_u16() == 401 {
-            Err(RnuError::AuthenticationError("Invalid credentials".to_string()))
+            Err(RnuError::AuthenticationError(
+                "Invalid credentials".to_string(),
+            ))
         } else {
             Err(RnuError::NetworkError(format!(
                 "Failed to check Maven artifact existence: HTTP {}",
@@ -245,9 +250,13 @@ impl NexusClient {
         if response.status().is_success() {
             Ok(())
         } else if response.status().as_u16() == 401 {
-            Err(RnuError::AuthenticationError("Invalid credentials".to_string()))
+            Err(RnuError::AuthenticationError(
+                "Invalid credentials".to_string(),
+            ))
         } else if response.status().as_u16() == 403 {
-            Err(RnuError::AuthenticationError("Insufficient permissions".to_string()))
+            Err(RnuError::AuthenticationError(
+                "Insufficient permissions".to_string(),
+            ))
         } else {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();

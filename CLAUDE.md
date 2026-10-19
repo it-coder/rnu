@@ -15,14 +15,24 @@
 - 错误处理：`thiserror` derive，含 `From<quick_xml::Error>`
 - 异步运行时：`tokio`（`#[tokio::main]`，`JoinSet` + `Semaphore` 并发）
 - 日志：`tracing` + `tracing-subscriber`（env-filter），`-v` = INFO，`RUST_LOG=debug` 可深入
-- HTTP 客户端：`reqwest` 非 blocking，30s 超时，自定义 UA
+- HTTP 客户端：`reqwest` 非 blocking，30s 超时，自定义 UA；TLS 走 **rustls**（`rustls-tls-native-roots`），不依赖 OpenSSL
 
 **已知问题：**
-- `Cargo.toml` license = `Apache-2.0`，`readme.md` license = `Apache-2.0`（已统一）
+- `Cargo.toml` license = `Apache-2.0`，仓库根目录已有 `LICENSE` 全文（Apache-2.0）
+- 版本号硬编码在**两处**：`Cargo.toml` 与 `src/cli.rs` 的 clap `version`。clap 显式 version 会覆盖 `CARGO_PKG_VERSION`，只改 `Cargo.toml` 会让 `nexus-upload --version` 停留在旧版本 —— 升版本请走 `make tag NEW_VERSION=x.y.z`；CI 会校验 tag 与 `Cargo.toml` 一致
 - `tests/nexus_test.rs` 为集成测试占位文件（后续需 docker-compose Nexus 环境）
 - `anyhow` 已移除；`thiserror` / `tokio` 已激活；`tracing` / `quick-xml` 已引入
-- `docs/` 目录尚未创建，后续按需建立
+- `src/nexus/mod.rs` 的 `test_config()` 里**硬编码了真实服务器地址与明文密码**，`test_upload_tarball` 硬编码了本机绝对路径，待改为环境变量
+- `src/utils/mod.rs` 除 `progress` 之外全部是死代码；`UploadProgress::increment_skipped` 从未被调用，`--skip-existing` 跳过的包不计入统计
+- `docs/` 目录已存在但为空，后续按需建立子目录
+- `make check`（含 `clippy -D warnings`）当前**会失败**，仓库里有 14 条 dead_code 等告警待清理 —— 因此 CI 门禁只跑 `fmt --check` 与 `cargo test`，clippy 尚未纳入
 - `PROJECT_SUMMARY.md` / `readme.md` 为面向用户文档，改功能后同步更新
+
+**跨平台构建要点：**
+- 代码本身无平台分支：路径统一 `PathBuf`，配置目录用 `dirs::config_dir()`
+- 正式产物由 `.github/workflows/release.yml` 在 5 个原生 runner 上构建，不依赖本机交叉工具链
+- `.cargo/config.toml` 为 Windows（msvc/gnu）与 Linux musl 目标开启 `crt-static`，产物自包含
+- 本机能直接打的只有 macOS 两个 arch；Linux/Windows 请走 CI
 
 ---
 
@@ -45,11 +55,19 @@ rnu/
 │       └── progress.rs   indicatif 进度条封装
 ├── tests/
 │   └── nexus_test.rs     集成测试占位
+├── .github/
+│   └── workflows/
+│       └── release.yml   打 v* tag → 5 平台构建 → 汇总到 GitHub Release
+├── .cargo/
+│   └── config.toml       交叉目标的 rustflags（Windows/Linux musl 静态链接）
+├── docs/                 设计决策/路线图/工程笔记/用户文档
 ├── examples/
 │   └── example_usage.sh  使用示例脚本
 ├── Cargo.toml            二进制名 nexus-upload，edition 2021
+├── rust-toolchain.toml   固定 stable 渠道 + rustfmt/clippy
 ├── Makefile              构建/测试/安装/打包
 ├── config.example.json   配置文件模板
+├── LICENSE               Apache-2.0 全文
 ├── readme.md             用户文档
 ├── PROJECT_SUMMARY.md    项目总结（改代码后同步更新）
 ├── AGENTS.md             指向本文件
@@ -94,6 +112,19 @@ cargo run -- maven ./target --dry-run -v      # Maven 干运行
 cargo build --release
 make release
 
+# 正式发版：升版本 → 打 tag → 推 tag（CI 构建 5 个平台并发布 Release）
+make tag NEW_VERSION=0.2.0
+git push origin master --tags
+
+# 打包（TARGET 留空 = 宿主平台；产物在 dist/，附 .sha256）
+make package
+make package TARGET=x86_64-unknown-linux-musl
+make targets          # rustup target add 常用平台
+make package-all      # 按 PLATFORMS 逐个打（需交叉工具链）
+
+# 升版本（同步 Cargo.toml + src/cli.rs 的 clap version，提交并打 tag）
+make tag NEW_VERSION=0.2.0
+
 # 测试
 cargo test
 cargo test -- --nocapture
@@ -128,3 +159,4 @@ make update   # cargo update
 7. **提交信息**：中文，简明描述改动。
 8. **交流**：用中文。
 9. **文档**：改代码后同步更新 `PROJECT_SUMMARY.md` 和 `readme.md`。`docs/` 目录后续按需创建：`design/`（设计决策）、`plan/`（路线图）、`notes/`（工程笔记，含 `crate-notes.md`）、`user/`（用户文档）。
+10. **打包**：一律走 `make package`，不要手写 `tar`/`cp` 流程。Makefile 里与平台相关的路径都通过 `TARGET` / `EXE` / `RELEASE_DIR` 派生，新增 recipe 时不要硬编码 `target/release/nexus-upload` —— Windows 上产物是 `nexus-upload.exe`。Makefile 与 `examples/` 下的脚本要同时兼容 GNU Make 3.81、macOS 的 BSD 工具链与 MSYS2；新增 shell 代码前先确认它是不是 POSIX（例如 `echo -e` 在 dash 下会把 `-e` 当字面文本打印出来，应改用 `printf`）。

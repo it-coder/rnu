@@ -1,1 +1,5 @@
 /target
+/target-bench
+/dist
+.DS_Store
+.workbuddy

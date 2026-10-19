@@ -1,0 +1,17 @@
+# 交叉编译与产物自包含配置。
+# 这些 rustflags 只在对应 target 下生效，不影响宿主平台的日常构建。
+
+# Windows MSVC：静态链接 CRT，产物不再依赖 VCRUNTIME140.dll
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Windows GNU：同样静态链接，避免额外分发 libgcc_s_seh-1.dll / libwinpthread-1.dll
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Linux musl：静态链接是默认行为，这里显式声明，避免以后被 profile 或环境变量改掉
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]

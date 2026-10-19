@@ -15,7 +15,16 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+# 关闭默认特性以避免 native-tls：Linux 目标下它会拉入 openssl-sys，
+# 交叉编译 / musl 静态链接都要为目标平台准备 OpenSSL。
+# rustls-tls-native-roots 仍读取系统信任库，内网 Nexus 的自签 CA 照常有效。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "multipart",
+    "http2",
+    "charset",
+    "rustls-tls-native-roots",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros"] }

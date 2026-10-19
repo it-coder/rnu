@@ -1,0 +1,130 @@
+name: Release
+
+# 打 v* 标签触发全平台构建并发布；也可手动触发（只构建，不发布）。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # 每个平台在自己原生 runner 上构建，不使用本机交叉工具链
+  RUST_BACKTRACE: 1
+
+jobs:
+  verify:
+    name: 版本与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验 tag 与 Cargo.toml 版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          echo "tag=$tag  Cargo.toml=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::tag $tag 与 Cargo.toml 版本 $ver 不一致，先跑 make tag NEW_VERSION=$tag"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 格式检查
+        run: cargo fmt --all --check
+
+      - name: 单元测试
+        run: cargo test --all-targets
+
+  build:
+    name: 构建 ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,      target: aarch64-apple-darwin,       cross: false }
+          - { os: macos-14,      target: x86_64-apple-darwin,        cross: false }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,  cross: false }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: true  }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    cross: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # aarch64-musl 用 cross（内部起 Docker），其余用原生 cargo
+      - if: matrix.cross
+        uses: taiki-e/install-action@cross
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Windows 上 make 不一定预装，缺失时补装（recipe 本身由 Git Bash 执行）
+      - name: 确保 make 可用
+        if: runner.os == 'Windows'
+        shell: bash
+        run: make --version > /dev/null 2>&1 || choco install make -y --no-progress
+
+      - name: 打包
+        shell: bash
+        run: |
+          CARGO_BIN=cargo
+          if [ "${{ matrix.cross }}" = "true" ]; then CARGO_BIN=cross; fi
+          make package TARGET=${{ matrix.target }} CARGO="$CARGO_BIN"
+
+      - name: 冒烟测试
+        shell: bash
+        run: |
+          bin="$(find dist -name 'nexus-upload*' -type f | head -n1)"
+          echo "运行 $bin"
+          "$bin" --version
+          "$bin" --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rnu-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: 发布到 GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 生成统一校验和
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 创建或更新 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            && gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber \
+            || gh release create "$GITHUB_REF_NAME" artifacts/* \
+                 --title "$GITHUB_REF_NAME" --generate-notes

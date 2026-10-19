@@ -6,7 +6,7 @@ RNU (Rust Nexus Uploader) 是一个基于 Rust 开发的 CLI 工具，支持将 
 
 二进制名：`nexus-upload`
 
-## 当前实现 (v0.2.0)
+## 当前实现 (v0.1.0)
 
 ### npm 包批量上传
 - 扫描 `node_modules` 目录，解析 `package.json`
@@ -97,12 +97,39 @@ nexus-upload config init
 nexus-upload config add staging --server https://nx.example.com --repository npm-private --user deploy
 ```
 
+## 打包与分发
+
+打包统一走 Makefile，产物落在 `dist/`：
+
+```bash
+make package                                  # 宿主平台
+make package TARGET=x86_64-unknown-linux-musl # 指定平台（交叉）
+make package-all                              # 按 PLATFORMS 清单逐个打
+make targets                                  # rustup target add 常用平台
+make tag NEW_VERSION=0.2.0                    # 升版本 + 提交 + 打 tag
+```
+
+产物命名带平台标识 `rnu-<version>-<target-triple>.tar.gz`，并附 `.sha256`；tar 内是单层目录（`nexus-upload` / `readme.md` / `config.example.json` / `example_usage.sh`），解包不会散落。
+
+Makefile 里所有平台相关路径由 `TARGET` / `EXE` / `RELEASE_DIR` 派生，Windows 上自动使用 `nexus-upload.exe` 与 `target/<triple>/release/`。
+
+**跨平台约束**：Rust 编译产物是平台相关的原生机器码，单个二进制无法跨操作系统运行，只能按平台分别出包。本机交叉能力取决于工具链 —— macOS 可交叉出两个 Apple 架构，Windows 目标需 mingw-w64，Linux 目标需 cross + Docker 或 zig。
+
+**正式发布走 CI**：`.github/workflows/release.yml` 在推送 `v*` tag 时触发，5 个平台各自在原生 runner 上构建（macOS 双架构 / Linux musl 双架构 / Windows msvc），跑冒烟测试后生成统一 `SHA256SUMS`，汇总到同一个 GitHub Release。手动触发只构建不发布。
+
+`reqwest` 已切换到 `rustls-tls-native-roots`，不再依赖 OpenSSL，交叉编译不再受目标平台 `libssl` 制约；同时仍读取系统信任库，内网 Nexus 的自签 CA 照常有效。Windows 与 Linux musl 目标在 `.cargo/config.toml` 里开启 `crt-static`，产物自包含（Windows 无需 VC++ 运行库，Linux 不依赖 glibc 版本）。
+
 ## 未来规划
 
 - [ ] PyPI 包支持
 - [ ] `--include-dev` 实现（npm devDependencies 过滤）
 - [ ] 上传失败重试
 - [ ] 配置文件 `config remove` 子命令
+- [x] 多平台发布走 CI matrix（各平台原生 runner 构建，规避交叉工具链）
+- [x] 将 `native-tls` 换为 `rustls-tls-native-roots`，降低交叉编译门槛（保留系统信任库，企业自签 CA 不受影响）
+- [ ] 修复 scoped 包名被截断（`@types/node` → `node`）导致 `--only` / `--skip-existing` 失效
+- [ ] 修复 Maven `-sources.jar` / `-javadoc.jar` 缺少 `classifier` 被当作主 jar 上传
+- [ ] 将 `src/nexus/mod.rs` 测试中的硬编码地址与明文密码改为环境变量
 
 ## License
 

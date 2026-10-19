@@ -1,0 +1,6 @@
+# 固定工具链渠道，避免本地与 CI 因为 rustc 版本漂移导致构建结果不一致。
+# 需要更高版本时才改这里，不要依赖各机器默认的 stable。
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
