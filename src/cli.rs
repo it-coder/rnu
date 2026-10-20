@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "nexus-upload",
-    version = "0.1.0",
+    version = "0.2.0",
     about = "Rust Nexus Uploader - Upload packages to Nexus repository",
     long_about = "A CLI tool for uploading npm packages to Nexus repository with offline support"
 )]
