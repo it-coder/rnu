@@ -18,14 +18,15 @@ RNU (Rust Nexus Uploader) 是一个基于 Rust 开发的 CLI 工具，支持将 
 ### Maven 构件上传
 单一位置参数，布局自动识别（`--layout` 可覆盖）：
 
-- **项目模式**（目录含 `pom.xml`，或直接传该文件）：`mvn -B -q -Dmaven.repo.local=<临时仓库> dependency:go-offline` → 扫描临时仓库 → 上传。隔离仓库保证只带上本项目实际解析到的依赖，`~/.m2` 里其他项目不受影响；`--with-project` 改用 `install` 纳入本项目产物
+- **项目模式**（目录含 `pom.xml`，或直接传该文件）：`mvn -B -Dmaven.repo.local=<项目缓存仓库> dependency:go-offline` → 扫描该仓库 → 上传（缓存按项目隔离，pom.xml 变更即失效）。隔离仓库保证只带上本项目实际解析到的依赖，`~/.m2` 里其他项目不受影响；`--with-project` 改用 `install` 纳入本项目产物
 - **仓库布局**（`<group>/<artifact>/<version>/…`）：坐标取自路径，**不解析 XML**；classifier 取自文件名，版本边界严格（`foo:1.0` 不会收进 `foo-1.0.1.jar`）
 - **松散目录**（其它含 `.pom` 的目录）：递归找 `.pom` → quick-xml 解析坐标（支持 `<parent>` 继承）→ 匹配同目录伴生文件
 
 共同点：`maven2.*` multipart 上传（pom + jar + war + sources/javadoc），classifier 随 `maven2.assetN.classifier` 一并提交；`--skip-existing` / `--only` / `--exclude` / `-c` 均支持。
 
 ### 配置管理
-- JSON 配置文件（`~/.config/rnu/config.json`，权限 600）
+- TOML 配置文件（**当前目录** `./config.toml`，权限 600；`--config` 可指定，`.json` 路径仍按 JSON 读写）
+- 配置随项目走，不再使用全局 `~/.config/rnu/config.json`；旧文件用 `config init --from <路径>` 迁移
 - 多 profile（`--profile`），profile 内可按生态指定仓库
 - 优先级：CLI > 环境变量（`RNU_SERVER` / `RNU_USER` / `RNU_PASSWORD` / `RNU_REPO`）> profile > 配置文件默认值
 - 密码可来自环境变量、`-p` 或 profile；`config show` 一律打码
@@ -88,7 +89,7 @@ nexus-upload --profile prod npm . --skip-existing -c 8
 # npm — 过滤
 nexus-upload --profile local npm . --only "lodash,react"
 
-# Maven — 项目模式（自动识别 pom.xml，隔离临时仓库，只传这个项目需要的）
+# Maven — 项目模式（自动识别 pom.xml，按项目隔离的缓存仓库，只传这个项目需要的）
 nexus-upload maven ./my-app --skip-existing
 
 # Maven — 扫已有仓库布局（自动识别）
@@ -117,7 +118,7 @@ make targets                                  # rustup target add 常用平台
 make tag NEW_VERSION=0.2.0                    # 升版本 + 提交 + 打 tag
 ```
 
-产物命名带平台标识 `rnu-<version>-<target-triple>.tar.gz`，并附 `.sha256`；tar 内是单层目录（`nexus-upload` / `readme.md` / `config.example.json` / `example_usage.sh`），解包不会散落。
+产物命名带平台标识 `rnu-<version>-<target-triple>.tar.gz`，并附 `.sha256`；tar 内是单层目录（`nexus-upload` / `readme.md` / `config.example.toml` / `example_usage.sh`），解包不会散落。
 
 Makefile 里所有平台相关路径由 `TARGET` / `EXE` / `RELEASE_DIR` 派生，Windows 上自动使用 `nexus-upload.exe` 与 `target/<triple>/release/`。
 

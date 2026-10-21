@@ -150,7 +150,7 @@ endif
 
 # 产物落在 dist/ 下，tar 内是单层目录，解包不会散落一地：
 #     dist/rnu-0.1.0-aarch64-apple-darwin/
-#         nexus-upload  readme.md  config.example.json  example_usage.sh
+#         nexus-upload  readme.md  config.example.toml  example_usage.sh
 #     dist/rnu-0.1.0-aarch64-apple-darwin.tar.gz
 #     dist/rnu-0.1.0-aarch64-apple-darwin.tar.gz.sha256
 package: release
@@ -159,7 +159,7 @@ package: release
 	@mkdir -p $(DIST)/$(PKG)
 	cp $(RELEASE_DIR)/$(BIN)$(EXE) $(DIST)/$(PKG)/
 	cp readme.md $(DIST)/$(PKG)/
-	cp config.example.json $(DIST)/$(PKG)/
+	cp config.example.toml $(DIST)/$(PKG)/
 	cp examples/example_usage.sh $(DIST)/$(PKG)/
 	@cd $(DIST) && tar -czf $(PKG).tar.gz $(PKG)
 ifneq ($(strip $(SHA256)),)

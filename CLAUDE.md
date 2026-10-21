@@ -11,8 +11,8 @@
 **实现状态：**
 - ✅ npm 包批量上传（`nexus-upload npm <path>`）：三阶段流水线（同步扫描 → 并发 HEAD 过滤 → 并发上传）
 - ✅ Maven 构件上传，**单一位置参数 + 自动识别布局**（`MavenLayout::detect`），`--layout` 可覆盖：
-  - `project`：目录含 `pom.xml`（或直接传该文件）→ `mvn -Dmaven.repo.local=<临时仓库> dependency:go-offline`
-    → 扫描该临时仓库 → 上传。隔离仓库保证只上传本项目实际解析到的依赖；`--with-project` 改用 `install`
+  - `project`：目录含 `pom.xml`（或直接传该文件）→ `mvn -Dmaven.repo.local=<项目缓存> dependency:go-offline`
+    → 扫描该缓存 → 上传。隔离仓库保证只上传本项目实际解析到的依赖；`--with-project` 改用 `install`
     把本项目产物也纳入。`settings.xml` 原样使用（项目可能依赖只在私库存在的内部构件）
   - `repo`：`<group>/<artifact>/<version>/…` → **坐标取自路径**，classifier 取自文件名，无需解析 XML
   - `loose`：其它含 `.pom` 的目录 → 解析 XML 取坐标 + 同目录伴生文件
@@ -29,7 +29,6 @@
 - 版本号单一来源：`#[command(version)]` 取 `CARGO_PKG_VERSION`，只在 `Cargo.toml` 改版本即可（`make tag NEW_VERSION=x.y.z`）；CI 会校验 tag 与 `Cargo.toml` 一致
 - `tests/nexus_test.rs` 为集成测试占位文件（后续需 docker-compose Nexus 环境）
 - `anyhow` 已移除；`thiserror` / `tokio` 已激活；`tracing` / `quick-xml` 已引入
-- `src/nexus/mod.rs` 的 `test_config()` 里**硬编码了真实服务器地址与明文密码**，`test_upload_tarball` 硬编码了本机绝对路径，待改为环境变量
 - `src/utils/mod.rs` 除 `progress` 之外全部是死代码；`UploadProgress::increment_skipped` 目前只在 Maven 路径被调用，npm 的 `--skip-existing` 跳过项仍不计入统计
 - `npm --include-dev` 已标记为无效（`hide = true`，用了会打警告）：scanner 本来就扫全部 `node_modules`，这个开关从来没有实际作用
 - `docs/plan/roadmap.md` 记录了待修缺陷与排期（Maven POM 坐标解析错乱、scoped 包名截断等）
@@ -37,7 +36,8 @@
 - `PROJECT_SUMMARY.md` / `readme.md` 为面向用户文档，改功能后同步更新
 
 **跨平台构建要点：**
-- 代码本身无平台分支：路径统一 `PathBuf`，配置目录用 `dirs::config_dir()`
+- 代码本身无平台分支：路径统一 `PathBuf`；配置文件在**当前目录**（`./config.toml`），不再用 `dirs::config_dir()`
+  （仅 `legacy_config_file()` 还查一次旧的全局路径，用于提示迁移）
 - 正式产物由 `.github/workflows/release.yml` 在 5 个平台上构建（Linux musl 两个目标走 `cross` 容器，因为 `ring` 需要 musl 专用 C 交叉编译器），不依赖本机交叉工具链
 - `.cargo/config.toml` 为 Windows（msvc/gnu）与 Linux musl 目标开启 `crt-static`，产物自包含
 - 本机能直接打的只有 macOS 两个 arch；Linux/Windows 请走 CI
@@ -77,7 +77,7 @@ rnu/
 ├── Cargo.toml            二进制名 nexus-upload，edition 2021
 ├── rust-toolchain.toml   固定 stable 渠道 + rustfmt/clippy
 ├── Makefile              构建/测试/安装/打包
-├── config.example.json   配置文件模板
+├── config.example.toml   配置文件模板
 ├── LICENSE               Apache-2.0 全文
 ├── readme.md             用户文档
 ├── PROJECT_SUMMARY.md    项目总结（改代码后同步更新）
@@ -115,6 +115,13 @@ CLI 参数  >  环境变量（RNU_SERVER/USER/PASSWORD/REPO）  >  --profile  > 
 密码可来自 `-p` / `RNU_PASSWORD` / `profile.password` / `default_password`；若写入配置文件，
 `ConfigFile::save_to_file` 会 chmod 600，`config show` 一律打码。
 
+**配置文件位置**：当前工作目录的 `config.toml`（`get_default_config_file()` = `current_dir()/config.toml`）。
+跟着项目走是刻意的——同一台机器上不同项目可以指向不同 Nexus，也不用共享一份全局配置。
+序列化格式由扩展名决定（`Format::of`）：`.json` → JSON，其余 → TOML；`--config old.json` 因此仍可用。
+`profiles` / `repositories` 用 `BTreeMap`，保证重写后 key 顺序稳定（配置文件可能进版本库）。
+旧全局配置（`dirs::config_dir()/rnu/config.json`）不再读取，`legacy_config_file()` 只用于提示
+`config init --from <旧路径>`。
+
 ### Maven 布局识别（`MavenLayout::detect`）
 
 按顺序判定，任一步命中即返回：
@@ -126,6 +133,24 @@ CLI 参数  >  环境变量（RNU_SERVER/USER/PASSWORD/REPO）  >  --profile  > 
 4. 其余 → `loose`
 
 `--layout` 可跳过判定。判定逻辑在 `src/nexus/maven.rs`，改动时同步更新那里的 `detect_*` 测试。
+
+### 项目模式：解析与缓存（`src/mvn.rs`）
+
+```
+prepare_repo(project, fresh)  →  <cache_dir>/rnu/m2/<hash(project 绝对路径)>
+resolve_dependencies(...)     →  mvn -B -Dmaven.repo.local=<dir> dependency:go-offline
+                                 （--with-project 时改 install -DskipTests）
+```
+
+- **不要加回 `-q`**：下载行是唯一的进度信号，之前静默让人以为卡死。stdout/stderr 各起一个读线程
+  送进 channel，主线程用 spinner 显示最后一行（`summarise` 去掉 `[INFO]` 前缀并截断到 88 字符），
+  同时保留 400 行尾部用于失败报告（展示末 25 行）。
+- **stdin 必须是 `Stdio::null()`**：沿用 `output()` 时为 null，改 `spawn()` 后默认继承，
+  遇到要密码的仓库会永久阻塞。
+- **缓存按项目**（`DefaultHasher` 哈希项目绝对路径，跨进程稳定），`pom.xml` 内容哈希写在
+  `<root>/<key>.pom`，不一致就整目录重建——否则改完版本号，旧版本构件会被当成"本项目依赖"上传。
+  `--fresh` 强制重解，`--keep-repo <dir>` 用指定目录替代默认缓存。
+- 缓存目录取不到时（`dirs::cache_dir()` 为 None）退回 `TempDir`，`RepoCache::_temp` 负责保命。
 
 ---
 

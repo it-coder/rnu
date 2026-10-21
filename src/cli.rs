@@ -9,7 +9,9 @@ use std::path::PathBuf;
     long_about = "Batch-upload npm and Maven packages into a Nexus repository.\n\n\
                   Connection settings are resolved in this order (highest first):\n\
                   command-line flags > environment variables > --profile > config file.\n\
-                  Environment variables: RNU_SERVER, RNU_USER, RNU_PASSWORD, RNU_REPO",
+                  Environment variables: RNU_SERVER, RNU_USER, RNU_PASSWORD, RNU_REPO\n\n\
+                  The config file is ./config.toml in the current directory, so each\n\
+                  project can keep its own settings. Use --config to point elsewhere.",
     after_help = "Examples:\n  \
                   nexus-upload config init\n  \
                   nexus-upload maven ./my-app\n  \
@@ -67,7 +69,7 @@ pub struct Cli {
     #[arg(help_heading = "Connection", long, global = true, value_name = "NAME")]
     pub profile: Option<String>,
 
-    /// Path to the config file
+    /// Path to the config file (default: ./config.toml; a *.json path is still read as JSON)
     #[arg(help_heading = "Connection", long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
@@ -180,6 +182,9 @@ pub enum ConfigAction {
         /// Overwrite an existing config file
         #[arg(long)]
         force: bool,
+        /// Seed the new file from an existing one (TOML or JSON)
+        #[arg(long, value_name = "PATH")]
+        from: Option<PathBuf>,
     },
     /// Show the current configuration (password masked)
     Show,

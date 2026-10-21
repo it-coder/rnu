@@ -3,3 +3,6 @@
 /dist
 .DS_Store
 .workbuddy
+
+# 本地实际使用的配置（可能含密码）；模板见 config.example.toml
+/config.toml

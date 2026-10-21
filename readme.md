@@ -66,7 +66,8 @@ make install-user            # → ~/.local/bin/nexus-upload
 nexus-upload config init
 ```
 
-交互式写入 `~/.config/rnu/config.json`（server、用户名、各生态的仓库名、可选密码），文件权限为 `600`。
+交互式写入**当前目录**的 `config.toml`（server、用户名、各生态的仓库名、可选密码），文件权限为 `600`。
+配置文件跟着项目走：在哪个目录执行，就读哪份配置，不需要的项目互不干扰。
 非交互环境（CI）直接用全局参数或环境变量：
 
 ```bash
@@ -87,7 +88,7 @@ nexus-upload npm ./my-project --skip-existing -c 8
 `maven` 只有一个位置参数，来源由内容自动识别：
 
 ```bash
-# 项目目录（含 pom.xml）：用 mvn 把依赖解析到隔离的临时仓库，再全部上传
+# 项目目录（含 pom.xml）：用 mvn 把依赖解析到按项目隔离的缓存仓库，再全部上传
 # 不碰 ~/.m2，也不会带上别的项目
 nexus-upload maven ./my-app
 
@@ -107,11 +108,16 @@ nexus-upload maven ./target --layout loose
 项目模式的执行链路：
 
 ```
-mvn -B -q -Dmaven.repo.local=<临时目录> dependency:go-offline
-  └─ 扫描该临时目录（仓库布局）→ 每个 artifact 连同 classifier 一起上传
+mvn -B -Dmaven.repo.local=<缓存目录> dependency:go-offline
+  └─ 逐行读取 mvn 输出，用 spinner 显示当前在下载什么（不再静默）
+  └─ 扫描该目录（仓库布局）→ 每个 artifact 连同 classifier 一起上传
 ```
 
-坐标来自路径而不是解析 XML，因此 `-sources.jar` / `-javadoc.jar` 会带上正确的 classifier，不会冒充主 jar。临时仓库用完即删；`--keep-repo <dir>` 可复用，迭代时免去重复下载。
+坐标来自路径而不是解析 XML，因此 `-sources.jar` / `-javadoc.jar` 会带上正确的 classifier，不会冒充主 jar。
+
+**仓库按项目缓存**：默认落在 `~/Library/Caches/rnu/m2/<项目哈希>`（Linux `~/.cache/rnu/m2/…`），第二次运行直接复用，不用重新下载几百 MB。`pom.xml` 内容一变就自动作废重解（避免旧版本构件被当成「本项目依赖」上传）；`--fresh` 强制重解，`--keep-repo <dir>` 指定自己的目录，删掉缓存目录即可回收空间。
+
+首次解析会下载整个闭包（Spring Boot 系项目通常几百 MB、几分钟），期间 spinner 会显示 `Downloading from …`，不是卡死。
 
 Maven 的 `settings.xml` **原样使用**：项目可能依赖只存在于私库的内部构件，切断私库会导致解析失败。私库里已有的构件由 `--skip-existing` 挡掉。
 
@@ -128,7 +134,7 @@ Maven 的 `settings.xml` **原样使用**：项目可能依赖只存在于私库
 | `-p, --password` | `RNU_PASSWORD` | 密码 |
 | `-r, --repository` | `RNU_REPO` | 仓库名（不填则按生态取配置文件里的默认值） |
 | `--profile <NAME>` | | 使用配置文件中的 profile |
-| `--config <PATH>` | | 自定义配置文件路径 |
+| `--config <PATH>` | | 配置文件路径（默认 `./config.toml`；`.json` 结尾仍按 JSON 读写） |
 | `-v, --verbose` | | 详细日志（INFO 级别） |
 | `--dry-run` | | 预览模式，不实际上传 |
 | `-c, --concurrency <N>` | | 并发上传数（默认 4） |
@@ -152,7 +158,7 @@ nexus-upload maven <PATH> [--layout auto|project|repo|loose]
 
 | `PATH` 的形态 | 识别结果 | 行为 |
 |---|---|---|
-| 目录含 `pom.xml`，或直接传 `pom.xml` | `project` | 用 `mvn` 解析依赖闭包到临时仓库后上传 |
+| 目录含 `pom.xml`，或直接传 `pom.xml` | `project` | 用 `mvn` 解析依赖闭包到缓存仓库后上传 |
 | `<group>/<artifact>/<version>/…` | `repo` | 扫描仓库布局，坐标取自路径 |
 | 其它含 `.pom` 的目录 | `loose` | 解析 POM XML 取坐标，匹配同目录构件 |
 
@@ -161,13 +167,15 @@ nexus-upload maven <PATH> [--layout auto|project|repo|loose]
 | 选项 | 说明 |
 |---|---|
 | `--with-project` | 连本项目产物一起传（`install` 而非 `go-offline`） |
-| `--keep-repo <DIR>` | 复用持久化仓库目录而非临时目录 |
+| `--keep-repo <DIR>` | 用指定目录替代默认缓存目录 |
+| `--fresh` | 忽略缓存，强制重新解析依赖 |
 | `--mvn <PATH>` | 指定 `mvn` 可执行文件（也支持 `RNU_MVN`） |
 
 ### `config` 子命令
 
 ```bash
-nexus-upload config init              # 初始化配置文件（终端里交互式）
+nexus-upload config init              # 在当前目录生成 config.toml（终端里交互式）
+nexus-upload config init --from OLD   # 从旧配置迁移（TOML 或 JSON）
 nexus-upload config show              # 显示当前配置（密码打码）
 nexus-upload config list              # 列出默认值与所有 profile
 nexus-upload -s URL -u USER config add corp \   # 添加 profile
@@ -176,32 +184,33 @@ nexus-upload -s URL -u USER config add corp \   # 添加 profile
 
 ## 配置文件
 
-位置：`~/.config/rnu/config.json`（UNIX 下权限 `600`）
+位置：**当前目录**下的 `config.toml`（UNIX 下权限 `600`）。`--config <PATH>` 可指向别处，`.json` 结尾的路径仍按 JSON 读写，老配置直接能用。
 
-```json
-{
-  "default_server": "http://localhost:8081",
-  "default_user": "admin",
-  "repositories": {
-    "npm": "npm-hosted",
-    "maven": "maven-releases"
-  },
-  "profiles": {
-    "corp": {
-      "server": "https://nexus.company.com",
-      "user": "deployer",
-      "repositories": {
-        "npm": "npm-internal",
-        "maven": "maven-releases"
-      }
-    }
-  }
-}
+```toml
+default_server = "http://localhost:8081"
+default_user = "admin"
+# default_password = ""          # 不建议落盘，优先 RNU_PASSWORD
+
+[repositories]
+npm = "npm-hosted"
+maven = "maven-releases"
+
+[profiles.corp]
+server = "https://nexus.company.com"
+user = "deployer"
+
+[profiles.corp.repositories]
+npm = "npm-internal"
+maven = "maven-releases"
 ```
 
 优先级：`CLI 参数 > 环境变量 > --profile > 配置文件默认值`。
 
 仓库名按生态解析：`maven` 没有内置默认值——没配置就报错，而不是猜一个（早期版本会把 Maven 构件静默指向 `npm-hosted`）。旧配置里的 `default_repository` / `profile.repository` 仍然有效，但只作用于 npm。
+
+> **旧版（≤ 0.2.0）的全局配置**（`~/.config/rnu/config.json`，macOS 上是 `~/Library/Application Support/rnu/config.json`）不再读取。迁移：`nexus-upload config init --from "<旧路径>"`，字段原样带过来，JSON 也会转成 TOML 写法。
+>
+> 配置文件跟着项目走，含密码时记得把它排除在版本库外，或在 CI 里改用 `RNU_PASSWORD`。
 
 ## 使用示例
 
@@ -257,7 +266,7 @@ make tag NEW_VERSION=0.2.0
 rnu-0.1.0-aarch64-apple-darwin/
 ├── nexus-upload          # 可执行文件（Windows 上为 nexus-upload.exe）
 ├── readme.md
-├── config.example.json
+├── config.example.toml
 └── example_usage.sh
 ```
 

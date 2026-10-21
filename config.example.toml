@@ -1,0 +1,39 @@
+# nexus-upload 配置示例
+#
+# 用法：复制成当前目录下的 config.toml（`nexus-upload config init` 会自动生成），
+# 放在项目根目录即可，每个项目可以有自己的一份。
+#
+# 优先级（高到低）：命令行参数 > 环境变量 > --profile > 本文件
+# 环境变量：RNU_SERVER / RNU_USER / RNU_PASSWORD / RNU_REPO / RNU_MVN
+
+default_server = "http://localhost:8081"
+default_user = "admin"
+
+# 不建议把密码写进文件（尤其是会提交进版本库的配置文件）。
+# 需要免交互时优先用环境变量：RNU_PASSWORD=xxx nexus-upload maven ./my-app
+# 确需写入时文件权限会被设为 600。
+# default_password = ""
+
+# 各生态的默认仓库。maven 没有内置默认值：不配置就直接报错，
+# 以免把构件推到 npm 仓库里。
+[repositories]
+npm = "npm-hosted"
+maven = "maven-releases"
+
+# profile 用来在多套环境之间切换：nexus-upload --profile corp maven ./my-app
+[profiles.local]
+server = "http://localhost:8081"
+user = "admin"
+
+[profiles.local.repositories]
+npm = "npm-hosted"
+maven = "maven-releases"
+
+[profiles.corp]
+server = "https://nexus.company.com"
+user = "deployer"
+# password = ""
+
+[profiles.corp.repositories]
+npm = "npm-internal"
+maven = "maven-releases"

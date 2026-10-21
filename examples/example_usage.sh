@@ -41,12 +41,12 @@ fi
 
 say "${GREEN}Example 1: Initialize configuration${NC}"
 echo "Command: $NEXUS_UPLOAD config init"
-echo "Description: Creates a sample configuration file with default profiles"
+echo "Description: Creates ./config.toml in the current directory (interactive in a terminal)"
 echo
 
 say "${GREEN}Example 2: Show current configuration${NC}"
 echo "Command: $NEXUS_UPLOAD config show"
-echo "Description: Displays the current configuration file content"
+echo "Description: Displays ./config.toml with passwords masked"
 echo
 
 say "${GREEN}Example 3: List available profiles${NC}"

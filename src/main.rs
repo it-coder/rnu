@@ -14,7 +14,7 @@ use config::{
 };
 use error::{Result, RnuError};
 use nexus::{FilterOptions, MavenLayout, NexusUploader};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -173,7 +173,8 @@ fn resolve_layout(path: &Path, requested: LayoutArg) -> Result<MavenLayout> {
 }
 
 fn build_config(cli: &Cli, kind: Kind) -> Result<config::Config> {
-    let config_file = ConfigFile::load_from_file(&config_path(cli)?)?;
+    let path = config_path(cli)?;
+    let config_file = ConfigFile::load_from_file(&path)?;
     let input = ResolveInput {
         server: cli.server.as_deref(),
         user: cli.user.as_deref(),
@@ -183,7 +184,24 @@ fn build_config(cli: &Cli, kind: Kind) -> Result<config::Config> {
         verbose: cli.verbose,
         dry_run: cli.dry_run,
     };
-    ConfigResolver::resolve(kind, &input, &config_file)
+    let resolved = ConfigResolver::resolve(kind, &input, &config_file);
+
+    // Only mention the old global config when the run actually needs one and
+    // there is none here — otherwise every command would nag about it.
+    if resolved.is_err() && cli.config.is_none() && !path.exists() {
+        if let Some(legacy) = config::legacy_config_file() {
+            eprintln!(
+                "{} Legacy config at {} is no longer read — the config file now lives in the \
+                 current directory ({}). Copy it over with:\n  nexus-upload config init --from \"{}\"",
+                "!".yellow().bold(),
+                legacy.display(),
+                config::CONFIG_FILE_NAME,
+                legacy.display()
+            );
+        }
+    }
+
+    resolved
 }
 
 fn config_path(cli: &Cli) -> Result<PathBuf> {
@@ -199,7 +217,7 @@ fn handle_config_command(action: &ConfigAction, cli: &Cli) -> Result<()> {
     let path = config_path(cli)?;
 
     match action {
-        ConfigAction::Init { force } => config_init(&path, *force, cli),
+        ConfigAction::Init { force, from } => config_init(&path, *force, from.as_deref(), cli),
         ConfigAction::Show => config_show(&path),
         ConfigAction::List => config_list(&path),
         ConfigAction::Add {
@@ -216,7 +234,7 @@ fn handle_config_command(action: &ConfigAction, cli: &Cli) -> Result<()> {
     }
 }
 
-fn config_init(path: &Path, force: bool, cli: &Cli) -> Result<()> {
+fn config_init(path: &Path, force: bool, from: Option<&Path>, cli: &Cli) -> Result<()> {
     if path.exists() && !force {
         return Err(RnuError::ConfigError(format!(
             "Configuration file already exists at {}. Use --force to overwrite.",
@@ -224,7 +242,18 @@ fn config_init(path: &Path, force: bool, cli: &Cli) -> Result<()> {
         )));
     }
 
-    let mut cfg = create_sample_config();
+    let mut cfg = match from {
+        Some(source) => {
+            if !source.exists() {
+                return Err(RnuError::ConfigError(format!(
+                    "Cannot seed from {}: file not found",
+                    source.display()
+                )));
+            }
+            ConfigFile::load_from_file(source)?
+        }
+        None => create_sample_config(),
+    };
     let interactive = io::stdin().is_terminal() && cli.server.is_none();
 
     if interactive {
@@ -233,16 +262,28 @@ fn config_init(path: &Path, force: bool, cli: &Cli) -> Result<()> {
             path.display()
         );
 
+        // Seed the repo prompts from whatever the base config already had, so a
+        // `--from` migration only needs Enter pressed a few times.
+        let existing = cfg.repositories.clone().unwrap_or_default();
+        let npm_default = existing
+            .get("npm")
+            .cloned()
+            .unwrap_or_else(|| "npm-hosted".to_string());
+        let maven_default = existing
+            .get("maven")
+            .cloned()
+            .unwrap_or_else(|| "maven-releases".to_string());
+
         cfg.default_server = prompt("Nexus server URL", cfg.default_server.as_deref())?;
         cfg.default_user = prompt("Username", cfg.default_user.as_deref())?;
-        let npm_repo = prompt("npm repository", Some("npm-hosted"))?;
-        let maven_repo = prompt("Maven repository", Some("maven-releases"))?;
+        let npm_repo = prompt("npm repository", Some(&npm_default))?;
+        let maven_repo = prompt("Maven repository", Some(&maven_default))?;
         // Asked last: rpassword reads from the terminal directly, so mix it
         // with the stdin prompts only once they are done.
         cfg.default_password =
             prompt_secret("Password (empty = use RNU_PASSWORD)")?.filter(|v| !v.is_empty());
 
-        let mut repos = HashMap::new();
+        let mut repos = BTreeMap::new();
         if let Some(repo) = npm_repo.filter(|v| !v.is_empty()) {
             repos.insert("npm".to_string(), repo);
         }
@@ -250,8 +291,10 @@ fn config_init(path: &Path, force: bool, cli: &Cli) -> Result<()> {
             repos.insert("maven".to_string(), repo);
         }
         cfg.repositories = if repos.is_empty() { None } else { Some(repos) };
-        // Interactive init writes flat defaults, not the placeholder profiles.
-        cfg.profiles = None;
+        if from.is_none() {
+            // Fresh init writes flat defaults, not the placeholder profiles.
+            cfg.profiles = None;
+        }
     } else {
         // Non-interactive: take whatever flags/env supplied, keep the rest.
         if let Some(server) = &cli.server {
@@ -274,8 +317,12 @@ fn config_init(path: &Path, force: bool, cli: &Cli) -> Result<()> {
     );
     if cfg.default_password.is_some() {
         println!(
-            "  {} Password stored in plain text (file mode 600). Prefer RNU_PASSWORD in CI.",
-            "!".yellow().bold()
+            "  {} Password stored in plain text (file mode 600). Prefer RNU_PASSWORD, and keep \
+             {} out of version control if it holds a password.",
+            "!".yellow().bold(),
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
         );
     }
     println!(
@@ -298,7 +345,7 @@ fn config_show(path: &Path) -> Result<()> {
 
     let cfg = mask_secrets(ConfigFile::load_from_file(path)?);
     println!("Configuration file: {}", path.display());
-    println!("{}", serde_json::to_string_pretty(&cfg)?);
+    println!("{}", cfg.render(path)?);
     Ok(())
 }
 
@@ -349,7 +396,7 @@ fn config_add(
 
     let mut cfg = ConfigFile::load_from_file(path)?;
 
-    let mut repos = HashMap::new();
+    let mut repos = BTreeMap::new();
     if let Some(repo) = npm_repo {
         repos.insert("npm".to_string(), repo);
     }
@@ -384,12 +431,10 @@ fn config_add(
     Ok(())
 }
 
-fn sorted_repos(repos: Option<&HashMap<String, String>>) -> Vec<(String, String)> {
-    let mut items: Vec<(String, String)> = repos
+fn sorted_repos(repos: Option<&BTreeMap<String, String>>) -> Vec<(String, String)> {
+    repos
         .map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default();
-    items.sort();
-    items
+        .unwrap_or_default()
 }
 
 fn mask_secrets(mut cfg: ConfigFile) -> ConfigFile {

@@ -1,8 +1,11 @@
 use crate::error::{Result, RnuError};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Default file name, looked up in the current working directory.
+pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 /// Package ecosystem. Repository resolution and defaults are per-kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +55,14 @@ pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_repository: Option<String>,
     /// Repository per ecosystem, e.g. `{"npm": "npm-hosted", "maven": "maven-releases"}`.
+    ///
+    /// `BTreeMap` rather than `HashMap` so a rewritten config file keeps a
+    /// stable key order — it now lives next to the project and may well be
+    /// committed, where reshuffled keys show up as diff noise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repositories: Option<HashMap<String, String>>,
+    pub repositories: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub profiles: Option<HashMap<String, ProfileConfig>>,
+    pub profiles: Option<BTreeMap<String, ProfileConfig>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -65,7 +72,7 @@ pub struct ProfileConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repositories: Option<HashMap<String, String>>,
+    pub repositories: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,8 +134,25 @@ impl ConfigFile {
         }
 
         let content = fs::read_to_string(path)?;
-        let config: ConfigFile = serde_json::from_str(&content)?;
-        Ok(config)
+        match Format::of(path) {
+            Format::Toml => toml::from_str(&content).map_err(|e| {
+                RnuError::ConfigError(format!("Failed to parse {} as TOML: {}", path.display(), e))
+            }),
+            Format::Json => serde_json::from_str(&content).map_err(|e| {
+                RnuError::ConfigError(format!("Failed to parse {} as JSON: {}", path.display(), e))
+            }),
+        }
+    }
+
+    /// Render in the format implied by the file extension: `.json` stays JSON
+    /// (so `--config old.json` keeps working), everything else is TOML.
+    pub fn render(&self, path: &Path) -> Result<String> {
+        match Format::of(path) {
+            Format::Toml => toml::to_string_pretty(self).map_err(|e| {
+                RnuError::ConfigError(format!("Failed to serialise config as TOML: {}", e))
+            }),
+            Format::Json => Ok(serde_json::to_string_pretty(self)?),
+        }
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
@@ -138,8 +162,7 @@ impl ConfigFile {
             }
         }
 
-        let content = serde_json::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        fs::write(path, self.render(path)?)?;
         restrict_permissions(path)?;
         Ok(())
     }
@@ -152,8 +175,23 @@ impl ConfigFile {
 
     pub fn add_profile(&mut self, profile_name: String, profile: ProfileConfig) {
         self.profiles
-            .get_or_insert_with(HashMap::new)
+            .get_or_insert_with(BTreeMap::new)
             .insert(profile_name, profile);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Toml,
+    Json,
+}
+
+impl Format {
+    fn of(path: &Path) -> Self {
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("json") => Format::Json,
+            _ => Format::Toml,
+        }
     }
 }
 
@@ -172,16 +210,19 @@ fn restrict_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn get_config_dir() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir()
-        .ok_or_else(|| RnuError::ConfigError("Could not determine config directory".to_string()))?
-        .join("rnu");
-
-    Ok(config_dir)
+/// The config file lives in the **current directory** so that every project can
+/// carry its own Nexus settings instead of sharing one global file.
+pub fn get_default_config_file() -> Result<PathBuf> {
+    Ok(std::env::current_dir()?.join(CONFIG_FILE_NAME))
 }
 
-pub fn get_default_config_file() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join("config.json"))
+/// Where the pre-0.3 releases kept a global `config.json`. It is no longer read;
+/// this only exists so the CLI can point users at it once, instead of silently
+/// pretending their credentials disappeared.
+pub fn legacy_config_file() -> Option<PathBuf> {
+    dirs::config_dir()
+        .map(|dir| dir.join("rnu").join("config.json"))
+        .filter(|path| path.exists())
 }
 
 /// Everything the CLI (or the environment) supplied for this invocation.
@@ -307,20 +348,21 @@ impl ConfigResolver {
 
         Err(RnuError::ConfigError(format!(
             "Repository for {} is not configured. Use -r/--repository, set RNU_REPO, \
-             or add \"repositories\": {{\"{}\": \"<repo>\"}} to the config file \
+             or add `{} = \"<repo>\"` under [repositories] in {} \
              (`nexus-upload config init`).",
             kind.as_str(),
-            kind.as_str()
+            kind.as_str(),
+            CONFIG_FILE_NAME
         )))
     }
 }
 
 pub fn create_sample_config() -> ConfigFile {
-    let mut repositories = HashMap::new();
+    let mut repositories = BTreeMap::new();
     repositories.insert("npm".to_string(), "npm-hosted".to_string());
     repositories.insert("maven".to_string(), "maven-releases".to_string());
 
-    let mut profiles = HashMap::new();
+    let mut profiles = BTreeMap::new();
     profiles.insert(
         "local".to_string(),
         ProfileConfig {
@@ -358,7 +400,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn file_with(repositories: &[(&str, &str)], legacy: Option<&str>) -> ConfigFile {
-        let mut map = HashMap::new();
+        let mut map = BTreeMap::new();
         for (kind, repo) in repositories {
             map.insert(kind.to_string(), repo.to_string());
         }
@@ -410,7 +452,7 @@ mod tests {
     #[test]
     fn test_config_file_operations() {
         let dir = tempdir().unwrap();
-        let config_path = dir.path().join("test_config.json");
+        let config_path = dir.path().join("config.toml");
 
         let config = create_sample_config();
         config.save_to_file(&config_path).unwrap();
@@ -418,6 +460,77 @@ mod tests {
 
         let loaded = ConfigFile::load_from_file(&config_path).unwrap();
         assert!(loaded.get_profile("local").is_some());
+    }
+
+    #[test]
+    fn toml_round_trip_keeps_every_field() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = create_sample_config();
+        config.save_to_file(&path).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[repositories]"), "not TOML:\n{text}");
+        assert!(text.contains("[profiles.local]"), "not TOML:\n{text}");
+
+        let loaded = ConfigFile::load_from_file(&path).unwrap();
+        assert_eq!(loaded.default_server, config.default_server);
+        assert_eq!(loaded.repositories, config.repositories);
+        assert_eq!(
+            loaded.get_profile("production").unwrap().user.as_deref(),
+            Some("deployer")
+        );
+    }
+
+    #[test]
+    fn json_config_is_still_readable() {
+        // Users who point --config at an old JSON file must keep working.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("legacy.json");
+        fs::write(
+            &path,
+            r#"{"default_server":"http://nexus:8081","default_user":"admin",
+                "repositories":{"maven":"maven-releases"}}"#,
+        )
+        .unwrap();
+
+        let loaded = ConfigFile::load_from_file(&path).unwrap();
+        assert_eq!(loaded.default_server.as_deref(), Some("http://nexus:8081"));
+        assert_eq!(
+            loaded
+                .repositories
+                .as_ref()
+                .and_then(|r| r.get("maven"))
+                .map(String::as_str),
+            Some("maven-releases")
+        );
+
+        // And it is written back as JSON, not silently converted to TOML.
+        loaded.save_to_file(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.trim_start().starts_with('{'), "got: {text}");
+    }
+
+    #[test]
+    fn default_config_file_lives_in_the_current_directory() {
+        let path = get_default_config_file().unwrap();
+        assert_eq!(path.file_name().unwrap(), CONFIG_FILE_NAME);
+        assert_eq!(
+            path.parent().unwrap(),
+            std::env::current_dir().unwrap().as_path()
+        );
+    }
+
+    #[test]
+    fn broken_config_names_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "this is not = toml [").unwrap();
+
+        let err = ConfigFile::load_from_file(&path).unwrap_err().to_string();
+        assert!(err.contains("config.toml"), "unexpected error: {err}");
+        assert!(err.contains("TOML"), "unexpected error: {err}");
     }
 
     #[test]
@@ -476,7 +589,7 @@ mod tests {
     #[test]
     fn profile_repositories_beat_file_level_ones() {
         let mut file = file_with(&[("maven", "file-level")], None);
-        let mut repos = HashMap::new();
+        let mut repos = BTreeMap::new();
         repos.insert("maven".to_string(), "profile-level".to_string());
         file.add_profile(
             "corp".to_string(),
