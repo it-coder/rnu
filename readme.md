@@ -66,112 +66,158 @@ make install-user            # → ~/.local/bin/nexus-upload
 nexus-upload config init
 ```
 
-创建 `~/.config/rnu/config.json`。
+交互式写入 `~/.config/rnu/config.json`（server、用户名、各生态的仓库名、可选密码），文件权限为 `600`。
+非交互环境（CI）直接用全局参数或环境变量：
+
+```bash
+export RNU_SERVER=http://nexus.company.com:8081
+export RNU_USER=deployer
+export RNU_PASSWORD=***        # 推荐：密码不落盘
+```
 
 ### 2. 上传 npm 包
 
 ```bash
-nexus-upload --profile local -p password npm ./my-project
-nexus-upload --profile local -p password npm ./my-project --skip-existing --concurrency 8
+nexus-upload npm ./my-project
+nexus-upload npm ./my-project --skip-existing -c 8
 ```
 
 ### 3. 上传 Maven 构件
 
+`maven` 只有一个位置参数，来源由内容自动识别：
+
 ```bash
-nexus-upload --profile local -p password -r maven-releases maven ./target
-nexus-upload --profile local -p password maven ~/.m2/repository --skip-existing
+# 项目目录（含 pom.xml）：用 mvn 把依赖解析到隔离的临时仓库，再全部上传
+# 不碰 ~/.m2，也不会带上别的项目
+nexus-upload maven ./my-app
+
+# 连本项目自己的构建产物一起传（内部改为 mvn install）
+nexus-upload maven ./my-app --with-project
+
+# 已有的仓库布局目录
+nexus-upload maven ~/.m2/repository --skip-existing
+
+# 松散目录（一堆 pom/jar 平铺在一起，如 target/）
+nexus-upload maven ./target
+
+# 识别不准时显式指定
+nexus-upload maven ./target --layout loose
 ```
+
+项目模式的执行链路：
+
+```
+mvn -B -q -Dmaven.repo.local=<临时目录> dependency:go-offline
+  └─ 扫描该临时目录（仓库布局）→ 每个 artifact 连同 classifier 一起上传
+```
+
+坐标来自路径而不是解析 XML，因此 `-sources.jar` / `-javadoc.jar` 会带上正确的 classifier，不会冒充主 jar。临时仓库用完即删；`--keep-repo <dir>` 可复用，迭代时免去重复下载。
+
+Maven 的 `settings.xml` **原样使用**：项目可能依赖只存在于私库的内部构件，切断私库会导致解析失败。私库里已有的构件由 `--skip-existing` 挡掉。
 
 ## 命令参考
 
+所有全局参数既可写在子命令前，也可写在子命令后（`nexus-upload npm . -s URL` 与 `nexus-upload -s URL npm .` 等价）。
+
 ### 全局参数
 
-| 参数 | 说明 |
-|---|---|
-| `-s, --server` | Nexus 服务器 URL |
-| `-u, --user` | 用户名 |
-| `-p, --password` | 密码（必填，不落盘） |
-| `-r, --repository` | 仓库名 |
-| `--profile` | 使用配置文件中的 profile |
-| `--config` | 自定义配置文件路径 |
-| `-v, --verbose` | 详细日志（INFO 级别） |
-| `--dry-run` | 预览模式，不实际上传 |
+| 参数 | 环境变量 | 说明 |
+|---|---|---|
+| `-s, --server <URL>` | `RNU_SERVER` | Nexus 服务器 URL |
+| `-u, --user <USER>` | `RNU_USER` | 用户名 |
+| `-p, --password` | `RNU_PASSWORD` | 密码 |
+| `-r, --repository` | `RNU_REPO` | 仓库名（不填则按生态取配置文件里的默认值） |
+| `--profile <NAME>` | | 使用配置文件中的 profile |
+| `--config <PATH>` | | 自定义配置文件路径 |
+| `-v, --verbose` | | 详细日志（INFO 级别） |
+| `--dry-run` | | 预览模式，不实际上传 |
+| `-c, --concurrency <N>` | | 并发上传数（默认 4） |
+| `--skip-existing` | | 跳过 Nexus 中已存在的包 |
+| `--only <list>` | | 仅上传匹配的包（逗号分隔） |
+| `--exclude <list>` | | 排除匹配的包（逗号分隔） |
 
 ### `npm` 子命令
 
 ```bash
-nexus-upload npm <PATH> [选项]
+nexus-upload npm <PATH>
 ```
 
-| 选项 | 说明 |
-|---|---|
-| `--skip-existing` | 跳过 Nexus 中已存在的包 |
-| `--only <list>` | 仅上传匹配的包（逗号分隔） |
-| `--exclude <list>` | 排除匹配的包 |
-| `-c, --concurrency <N>` | 并发上传数（默认 4） |
+`PATH` 可以是项目根目录（自动找 `node_modules`）或 `node_modules` 本身。
 
 ### `maven` 子命令
 
 ```bash
-nexus-upload maven <PATH> [选项]
+nexus-upload maven <PATH> [--layout auto|project|repo|loose]
 ```
 
-接受的目录：Maven `target/`（平铺 POM+JAR）、本地仓库 `~/.m2/repository`（层级结构）、或任意含 `.pom` 文件的目录。
+| `PATH` 的形态 | 识别结果 | 行为 |
+|---|---|---|
+| 目录含 `pom.xml`，或直接传 `pom.xml` | `project` | 用 `mvn` 解析依赖闭包到临时仓库后上传 |
+| `<group>/<artifact>/<version>/…` | `repo` | 扫描仓库布局，坐标取自路径 |
+| 其它含 `.pom` 的目录 | `loose` | 解析 POM XML 取坐标，匹配同目录构件 |
+
+`--layout` 可跳过识别直接指定。项目模式专属选项：
 
 | 选项 | 说明 |
 |---|---|
-| `--skip-existing` | 跳过 Nexus 中已存在的 artifact |
-| `--only <list>` | 仅上传匹配的 artifactId |
-| `--exclude <list>` | 排除匹配的 artifactId |
-| `-c, --concurrency <N>` | 并发上传数（默认 4） |
+| `--with-project` | 连本项目产物一起传（`install` 而非 `go-offline`） |
+| `--keep-repo <DIR>` | 复用持久化仓库目录而非临时目录 |
+| `--mvn <PATH>` | 指定 `mvn` 可执行文件（也支持 `RNU_MVN`） |
 
 ### `config` 子命令
 
 ```bash
-nexus-upload config init              # 初始化配置文件
-nexus-upload config show              # 显示当前配置
-nexus-upload config list              # 列出所有 profile
-nexus-upload config add <NAME> \      # 添加 profile
-  --server <URL> --repository <REPO> --user <USER>
+nexus-upload config init              # 初始化配置文件（终端里交互式）
+nexus-upload config show              # 显示当前配置（密码打码）
+nexus-upload config list              # 列出默认值与所有 profile
+nexus-upload -s URL -u USER config add corp \   # 添加 profile
+  --npm-repo npm-internal --maven-repo maven-releases
 ```
 
 ## 配置文件
 
-位置：`~/.config/rnu/config.json`
+位置：`~/.config/rnu/config.json`（UNIX 下权限 `600`）
 
 ```json
 {
   "default_server": "http://localhost:8081",
-  "default_repository": "npm-hosted",
+  "default_user": "admin",
+  "repositories": {
+    "npm": "npm-hosted",
+    "maven": "maven-releases"
+  },
   "profiles": {
-    "local": {
-      "server": "http://localhost:8081",
-      "repository": "npm-hosted",
-      "user": "admin"
+    "corp": {
+      "server": "https://nexus.company.com",
+      "user": "deployer",
+      "repositories": {
+        "npm": "npm-internal",
+        "maven": "maven-releases"
+      }
     }
   }
 }
 ```
 
-优先级：`CLI 参数 > --profile > default_* > 内置默认值`
+优先级：`CLI 参数 > 环境变量 > --profile > 配置文件默认值`。
+
+仓库名按生态解析：`maven` 没有内置默认值——没配置就报错，而不是猜一个（早期版本会把 Maven 构件静默指向 `npm-hosted`）。旧配置里的 `default_repository` / `profile.repository` 仍然有效，但只作用于 npm。
 
 ## 使用示例
 
 ```bash
-# npm — 跳过已有 + 过滤 + 并发
-nexus-upload --profile prod -p $PASS npm . --skip-existing --only "lodash,react" -c 8
+# 配置文件就绪后，日常命令只有一个路径
+nexus-upload npm . --skip-existing --only "lodash,react" -c 8
+nexus-upload maven ./my-app --dry-run
 
-# npm — 干运行预览
-nexus-upload --profile local -p pass npm . --dry-run
+# CI：密码走环境变量，不落盘、不进 ps
+RNU_PASSWORD="$NEXUS_PASS" nexus-upload maven ./my-app -r maven-releases
 
-# Maven — 上传 target 构建产物
-nexus-upload --profile local -p pass -r maven-releases maven ./target
-
-# Maven — 从本地仓库扫描
-nexus-upload --profile local -p pass maven ~/.m2/repository --skip-existing -c 4
+# 用 profile 切换环境
+nexus-upload --profile corp maven ./my-app
 
 # 日志调试
-RUST_LOG=debug nexus-upload --profile local -p pass npm . -v
+RUST_LOG=debug nexus-upload npm . -v
 ```
 
 ## 开发

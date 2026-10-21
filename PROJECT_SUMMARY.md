@@ -6,7 +6,7 @@ RNU (Rust Nexus Uploader) 是一个基于 Rust 开发的 CLI 工具，支持将 
 
 二进制名：`nexus-upload`
 
-## 当前实现 (v0.1.0)
+## 当前实现 (v0.2.0)
 
 ### npm 包批量上传
 - 扫描 `node_modules` 目录，解析 `package.json`
@@ -16,22 +16,26 @@ RNU (Rust Nexus Uploader) 是一个基于 Rust 开发的 CLI 工具，支持将 
 - `--only` / `--exclude` 过滤，`-c` 并发数
 
 ### Maven 构件上传
-- 递归扫描目录树中的 `.pom` 文件
-- 使用 quick-xml 解析 POM：提取 `groupId` / `artifactId` / `version` / `packaging`
-- 支持 `<parent>` 继承坐标
-- 自动匹配同目录的 `.jar` / `.war` / `.aar` 文件
-- 通过 `maven2.*` multipart 表单上传（pom + jar + war 多 asset）
-- `--skip-existing` / `--only` / `--exclude` / `--concurrency` 均支持
+单一位置参数，布局自动识别（`--layout` 可覆盖）：
+
+- **项目模式**（目录含 `pom.xml`，或直接传该文件）：`mvn -B -q -Dmaven.repo.local=<临时仓库> dependency:go-offline` → 扫描临时仓库 → 上传。隔离仓库保证只带上本项目实际解析到的依赖，`~/.m2` 里其他项目不受影响；`--with-project` 改用 `install` 纳入本项目产物
+- **仓库布局**（`<group>/<artifact>/<version>/…`）：坐标取自路径，**不解析 XML**；classifier 取自文件名，版本边界严格（`foo:1.0` 不会收进 `foo-1.0.1.jar`）
+- **松散目录**（其它含 `.pom` 的目录）：递归找 `.pom` → quick-xml 解析坐标（支持 `<parent>` 继承）→ 匹配同目录伴生文件
+
+共同点：`maven2.*` multipart 上传（pom + jar + war + sources/javadoc），classifier 随 `maven2.assetN.classifier` 一并提交；`--skip-existing` / `--only` / `--exclude` / `-c` 均支持。
 
 ### 配置管理
-- JSON 配置文件（`~/.config/rnu/config.json`）
-- 多 profile（`--profile`）
-- CLI > profile > 默认值 优先级合并（`ConfigResolver`）
-- 密码不落盘，必须 `-p` 传入
+- JSON 配置文件（`~/.config/rnu/config.json`，权限 600）
+- 多 profile（`--profile`），profile 内可按生态指定仓库
+- 优先级：CLI > 环境变量（`RNU_SERVER` / `RNU_USER` / `RNU_PASSWORD` / `RNU_REPO`）> profile > 配置文件默认值
+- 密码可来自环境变量、`-p` 或 profile；`config show` 一律打码
+- 仓库名按生态解析，maven 无内置默认值（未配置即报错，不会误用 npm 仓库）
 
 ### CLI
 - clap derive，子命令 `npm` / `maven` / `config` / `pypi`(隐藏)
-- `--dry-run` 预览、`-v` tracing 日志、`--concurrency` 并发
+- **全局参数 `global = true`**：`-s/-u/-p/-r/--profile/--config/-v/--dry-run/-c/--skip-existing/--only/--exclude` 写在子命令前后均可
+- 连接信息可从env/配置文件读取，日常命令只需 `nexus-upload maven <path>`
+- 版本号由 `#[command(version)]` 取 `CARGO_PKG_VERSION`，单一来源
 
 ## 项目结构
 
@@ -41,11 +45,12 @@ src/
 ├── cli.rs            clap 数据定义
 ├── config.rs         配置层（Config + ConfigFile + ConfigResolver）
 ├── error.rs          错误类型（thiserror + From<quick_xml::Error>）
+├── mvn.rs            调用外部 mvn，把依赖解析进隔离仓库（--project）
 ├── nexus/
 │   ├── mod.rs        编排器（NexusUploader） + 类型 + 测试
 │   ├── client.rs     HTTP 客户端（npm/maven 上传、存在性检查、超时+UA）
 │   ├── scanner.rs    npm 扫描器（同步，无网络）
-│   └── maven.rs      Maven 扫描器 + POM 解析
+│   └── maven.rs      Maven 扫描器（松散 POM / 仓库布局）+ POM 解析 + classifier
 └── utils/
     ├── mod.rs        工具函数
     └── progress.rs   进度条
@@ -78,23 +83,26 @@ Phase 4 (async)  → 并发上传（JoinSet + Semaphore），统一进度和错�
 
 ```bash
 # npm — 并发 8 路 + 跳过已有
-nexus-upload --profile prod -p $PASS npm . --skip-existing -c 8
+nexus-upload --profile prod npm . --skip-existing -c 8
 
 # npm — 过滤
-nexus-upload --profile local -p pass npm . --only "lodash,react"
+nexus-upload --profile local npm . --only "lodash,react"
 
-# Maven — 上传 target
-nexus-upload --profile local -p pass -r maven-releases maven ./target -c 4
+# Maven — 项目模式（自动识别 pom.xml，隔离临时仓库，只传这个项目需要的）
+nexus-upload maven ./my-app --skip-existing
 
-# Maven — 本地仓库扫描 + 跳过已有
-nexus-upload --profile local -p pass maven ~/.m2/repository --skip-existing
+# Maven — 扫已有仓库布局（自动识别）
+nexus-upload maven ~/.m2/repository --skip-existing
+
+# Maven — 松散目录
+nexus-upload maven ./target --layout loose -c 4
 
 # 干运行
-nexus-upload --profile local -p pass npm . --dry-run
+nexus-upload maven ./my-app --dry-run
 
 # 配置管理
 nexus-upload config init
-nexus-upload config add staging --server https://nx.example.com --repository npm-private --user deploy
+nexus-upload -s https://nx.example.com -u deploy config add staging --npm-repo npm-private
 ```
 
 ## 打包与分发
@@ -122,13 +130,15 @@ Makefile 里所有平台相关路径由 `TARGET` / `EXE` / `RELEASE_DIR` 派生�
 ## 未来规划
 
 - [ ] PyPI 包支持
-- [ ] `--include-dev` 实现（npm devDependencies 过滤）
 - [ ] 上传失败重试
 - [ ] 配置文件 `config remove` 子命令
 - [x] 多平台发布走 CI matrix（各平台原生 runner 构建，规避交叉工具链）
 - [x] 将 `native-tls` 换为 `rustls-tls-native-roots`，降低交叉编译门槛（保留系统信任库，企业自签 CA 不受影响）
+- [x] CLI 简化：全局参数 `global = true`、环境变量认证、maven 布局自动识别、仓库按生态解析
 - [ ] 修复 scoped 包名被截断（`@types/node` → `node`）导致 `--only` / `--skip-existing` 失效
-- [ ] 修复 Maven `-sources.jar` / `-javadoc.jar` 缺少 `classifier` 被当作主 jar 上传
+- [x] 修复 Maven `-sources.jar` / `-javadoc.jar` 缺少 `classifier` 被当作主 jar 上传（`maven2.assetN.classifier`）
+- [x] Maven 支持项目模式（隔离临时仓库）、仓库布局扫描、松散目录三种来源，位置参数自动识别
+- [ ] 修复 Maven POM 解析时 dependencies 覆盖项目级坐标（松散 POM 路径）
 - [ ] 将 `src/nexus/mod.rs` 测试中的硬编码地址与明文密码改为环境变量
 
 ## License

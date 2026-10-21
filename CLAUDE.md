@@ -10,7 +10,14 @@
 
 **实现状态：**
 - ✅ npm 包批量上传（`nexus-upload npm <path>`）：三阶段流水线（同步扫描 → 并发 HEAD 过滤 → 并发上传）
-- ✅ Maven 构件上传（`nexus-upload maven <path>`）：POM XML 解析 → 匹配 JAR/WAR → 并发上传
+- ✅ Maven 构件上传，**单一位置参数 + 自动识别布局**（`MavenLayout::detect`），`--layout` 可覆盖：
+  - `project`：目录含 `pom.xml`（或直接传该文件）→ `mvn -Dmaven.repo.local=<临时仓库> dependency:go-offline`
+    → 扫描该临时仓库 → 上传。隔离仓库保证只上传本项目实际解析到的依赖；`--with-project` 改用 `install`
+    把本项目产物也纳入。`settings.xml` 原样使用（项目可能依赖只在私库存在的内部构件）
+  - `repo`：`<group>/<artifact>/<version>/…` → **坐标取自路径**，classifier 取自文件名，无需解析 XML
+  - `loose`：其它含 `.pom` 的目录 → 解析 XML 取坐标 + 同目录伴生文件
+- ✅ CLI 形态：全局参数均 `global = true`（可写在子命令前后）且支持环境变量
+  `RNU_SERVER` / `RNU_USER` / `RNU_PASSWORD` / `RNU_REPO` / `RNU_MVN`
 - ❌ pypi：子命令隐藏（`hide = true`），未实现
 - 错误处理：`thiserror` derive，含 `From<quick_xml::Error>`
 - 异步运行时：`tokio`（`#[tokio::main]`，`JoinSet` + `Semaphore` 并发）
@@ -19,12 +26,13 @@
 
 **已知问题：**
 - `Cargo.toml` license = `Apache-2.0`，仓库根目录已有 `LICENSE` 全文（Apache-2.0）
-- 版本号硬编码在**两处**：`Cargo.toml` 与 `src/cli.rs` 的 clap `version`。clap 显式 version 会覆盖 `CARGO_PKG_VERSION`，只改 `Cargo.toml` 会让 `nexus-upload --version` 停留在旧版本 —— 升版本请走 `make tag NEW_VERSION=x.y.z`；CI 会校验 tag 与 `Cargo.toml` 一致
+- 版本号单一来源：`#[command(version)]` 取 `CARGO_PKG_VERSION`，只在 `Cargo.toml` 改版本即可（`make tag NEW_VERSION=x.y.z`）；CI 会校验 tag 与 `Cargo.toml` 一致
 - `tests/nexus_test.rs` 为集成测试占位文件（后续需 docker-compose Nexus 环境）
 - `anyhow` 已移除；`thiserror` / `tokio` 已激活；`tracing` / `quick-xml` 已引入
 - `src/nexus/mod.rs` 的 `test_config()` 里**硬编码了真实服务器地址与明文密码**，`test_upload_tarball` 硬编码了本机绝对路径，待改为环境变量
-- `src/utils/mod.rs` 除 `progress` 之外全部是死代码；`UploadProgress::increment_skipped` 从未被调用，`--skip-existing` 跳过的包不计入统计
-- `docs/` 目录已存在但为空，后续按需建立子目录
+- `src/utils/mod.rs` 除 `progress` 之外全部是死代码；`UploadProgress::increment_skipped` 目前只在 Maven 路径被调用，npm 的 `--skip-existing` 跳过项仍不计入统计
+- `npm --include-dev` 已标记为无效（`hide = true`，用了会打警告）：scanner 本来就扫全部 `node_modules`，这个开关从来没有实际作用
+- `docs/plan/roadmap.md` 记录了待修缺陷与排期（Maven POM 坐标解析错乱、scoped 包名截断等）
 - `make check`（含 `clippy -D warnings`）当前**会失败**，仓库里有 14 条 dead_code 等告警待清理 —— 因此 CI 门禁只跑 `fmt --check` 与 `cargo test`，clippy 尚未纳入
 - `PROJECT_SUMMARY.md` / `readme.md` 为面向用户文档，改功能后同步更新
 
@@ -41,15 +49,18 @@
 ```
 rnu/
 ├── src/
-│   ├── main.rs           CLI 编排入口：parse → tracing init → config merge → 分发子命令
-│   ├── cli.rs            clap 数据定义（Cli / Commands / ConfigAction）
-│   ├── config.rs         配置层：Config + ConfigFile + ProfileConfig + ConfigResolver
+│   ├── main.rs           CLI 编排入口：parse → tracing init → layout 识别 → config merge → 分发
+│   ├── cli.rs            clap 数据定义（Cli / Commands / LayoutArg / ConfigAction）
+│   ├── config.rs         配置层：Kind + Config + ConfigFile + ProfileConfig + ConfigResolver
 │   ├── error.rs          错误类型：RnuError（thiserror），含 From<quick_xml::Error>
+│   ├── mvn.rs            调用外部 mvn，把依赖解析进隔离仓库（project 布局用）
 │   ├── nexus/
 │   │   ├── mod.rs        编排器 + PackageEntry/FilterOptions 类型 + 测试
 │   │   ├── client.rs     NexusClient（HTTP：npm/maven 上传、存在性检查）
 │   │   ├── scanner.rs    PackageScanner（npm 文件系统扫描，同步）
-│   │   └── maven.rs      MavenScanner + POM XML 解析 + MavenArtifact
+│   │   └── maven.rs      MavenLayout（自动识别）+ MavenScanner（松散 POM）
+│   │                     + MavenRepoScanner（仓库布局）
+│   │                     + MavenArtifact/MavenFile（含 classifier）+ POM XML 解析
 │   └── utils/
 │       ├── mod.rs        工具函数（部分 dead code，待清理）
 │       └── progress.rs   indicatif 进度条封装
@@ -78,11 +89,11 @@ rnu/
 
 ```
 nexus-upload npm/maven <path>
-  └─ Cli::parse()
+  └─ Cli::parse()                                    # global=true，参数可写在子命令前后
        └─ init_tracing(-v)
-            └─ build_config() → ConfigResolver::resolve()
+            └─ build_config(kind) → ConfigResolver::resolve()
                  └─ Config::validate()
-                      └─ Arc<NexusUploader>::run() / run_maven()
+                      └─ Arc<NexusUploader>::run() / run_maven(_repo|_project)()
                            ├─ Phase 1: PackageScanner/MavenScanner::scan()         # 同步
                            ├─ Phase 2: FilterOptions::should_include()             # 过滤
                            ├─ Phase 3: filter_existing() → 并发 HEAD              # skip_existing
@@ -92,10 +103,29 @@ nexus-upload npm/maven <path>
 ### 配置优先级
 
 ```
-CLI (-s/-u/-p/-r)  >  --profile 指定的 profile  >  配置文件 default_*  >  内置默认值
+CLI 参数  >  环境变量（RNU_SERVER/USER/PASSWORD/REPO）  >  --profile  >  配置文件 default_*  >  npm 内置默认值
 ```
 
-密码 **必须** 通过 `-p` 传入，不写入配置文件，不从 profile 读取。
+环境变量由 clap 的 `env` 属性合并进 `Cli` 结构，优先级天然高于配置文件、低于显式参数。
+
+**仓库名按生态解析**（`ConfigResolver::resolve_repository`）：`repositories.<kind>` 是主路径；
+旧的 `default_repository` / `profile.repository` 只对 npm 生效。**maven 没有内置默认值**——未配置就报错，
+不要加回 `npm-hosted` 兜底（那会让 Maven 构件静默指向 npm 仓库）。
+
+密码可来自 `-p` / `RNU_PASSWORD` / `profile.password` / `default_password`；若写入配置文件，
+`ConfigFile::save_to_file` 会 chmod 600，`config show` 一律打码。
+
+### Maven 布局识别（`MavenLayout::detect`）
+
+按顺序判定，任一步命中即返回：
+
+1. 路径是 `pom.xml` 文件 → `project`（其它文件直接报错）
+2. 目录下存在 `pom.xml` → `project`（项目目录里也有 `.pom`，所以必须先判）
+3. 递归扫描扩展名为 jar/war/aar/zip/pom 的文件，能被 `classify_in_repo` 解析出 `group/artifact/version`
+   的占比 ≥ 50% → `repo`（命中 32 个后提前结束，避免在大仓库上全量遍历）
+4. 其余 → `loose`
+
+`--layout` 可跳过判定。判定逻辑在 `src/nexus/maven.rs`，改动时同步更新那里的 `detect_*` 测试。
 
 ---
 

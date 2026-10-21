@@ -14,7 +14,7 @@ name = "nexus-upload"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 # 关闭默认特性以避免 native-tls：Linux 目标下它会拉入 openssl-sys，
 # 交叉编译 / musl 静态链接都要为目标平台准备 OpenSSL。
 # rustls-tls-native-roots 仍读取系统信任库，内网 Nexus 的自签 CA 照常有效。
@@ -39,9 +39,12 @@ urlencoding = "2.1"
 flate2 = "1.0"
 tar = "0.4"
 quick-xml = "0.37"
+# 交互式 config init 用，读取密码时不回显
+rpassword = "7.3"
+# 运行期用于创建隔离的临时 Maven 仓库（--project）
+tempfile = "3.0"
 
 [dev-dependencies]
-tempfile = "3.0"
 assert_cmd = "2.0"
 predicates = "3.0"
 

@@ -3,7 +3,7 @@ mod maven;
 mod scanner;
 
 pub use client::NexusClient;
-pub use maven::MavenScanner;
+pub use maven::{MavenLayout, MavenRepoScanner, MavenScanner};
 pub use scanner::PackageScanner;
 
 use crate::config::Config;
@@ -273,7 +273,8 @@ impl NexusUploader {
 
     // ── Maven pipeline ──────────────────────────────────────────
 
-    /// Execute the full Maven-upload pipeline.
+    /// Upload every artifact found by scanning a directory of loose `.pom`
+    /// files.
     pub async fn run_maven(
         self: Arc<Self>,
         path: PathBuf,
@@ -282,8 +283,85 @@ impl NexusUploader {
         concurrency: usize,
     ) -> Result<()> {
         let all = MavenScanner::scan(&path)?;
+        self.upload_artifacts(all, skip_existing, filter_options, concurrency)
+            .await
+    }
 
-        let filtered: Vec<MavenArtifact> = all
+    /// Upload every artifact found in an existing Maven **repository layout**
+    /// directory (`~/.m2/repository`, an offline repo, …).
+    pub async fn run_maven_repo(
+        self: Arc<Self>,
+        path: PathBuf,
+        skip_existing: bool,
+        filter_options: FilterOptions,
+        concurrency: usize,
+    ) -> Result<()> {
+        let all = MavenRepoScanner::scan(&path)?;
+        self.upload_artifacts(all, skip_existing, filter_options, concurrency)
+            .await
+    }
+
+    /// Resolve a project's dependency closure with `mvn` into an isolated local
+    /// repository, then upload everything that landed there.
+    ///
+    /// The isolated repo is what keeps unrelated projects out: only artifacts
+    /// this project actually resolved are uploaded.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_maven_project(
+        self: Arc<Self>,
+        project: PathBuf,
+        with_project: bool,
+        keep_repo: Option<PathBuf>,
+        mvn_bin: Option<PathBuf>,
+        skip_existing: bool,
+        filter_options: FilterOptions,
+        concurrency: usize,
+    ) -> Result<()> {
+        if with_project {
+            info!("Resolving project (install) into an isolated repository");
+        }
+
+        // Keep the TempDir alive until the upload finishes.
+        let temp_dir;
+        let repo_path: PathBuf = match keep_repo {
+            Some(ref dir) => {
+                fs::create_dir_all(dir)?;
+                warn!(
+                    "Reusing {} — it may still contain artifacts resolved by earlier runs",
+                    dir.display()
+                );
+                dir.clone()
+            }
+            None => {
+                temp_dir = tempfile::Builder::new().prefix("rnu-m2-").tempdir()?;
+                temp_dir.path().to_path_buf()
+            }
+        };
+
+        crate::mvn::resolve_dependencies(&project, &repo_path, with_project, mvn_bin.as_deref())?;
+
+        let all = MavenRepoScanner::scan(&repo_path)?;
+        if all.is_empty() {
+            warn!(
+                "Resolution succeeded but no artifacts were found in {}",
+                repo_path.display()
+            );
+            return Ok(());
+        }
+
+        self.upload_artifacts(all, skip_existing, filter_options, concurrency)
+            .await
+    }
+
+    /// Filter, de-duplicate against the server, and upload a set of artifacts.
+    async fn upload_artifacts(
+        self: Arc<Self>,
+        artifacts: Vec<MavenArtifact>,
+        skip_existing: bool,
+        filter_options: FilterOptions,
+        concurrency: usize,
+    ) -> Result<()> {
+        let filtered: Vec<MavenArtifact> = artifacts
             .into_iter()
             .filter(|a| filter_options.should_include(&a.artifact_id))
             .collect();
@@ -292,11 +370,13 @@ impl NexusUploader {
             return Ok(());
         }
 
-        let to_upload = if skip_existing {
+        let total = filtered.len() as u64;
+        let (to_upload, skipped) = if skip_existing {
             self.filter_existing_maven(filtered, concurrency).await?
         } else {
-            filtered
+            (filtered, 0u64)
         };
+
         if to_upload.is_empty() {
             info!("All artifacts already exist on server");
             return Ok(());
@@ -308,16 +388,21 @@ impl NexusUploader {
             concurrency
         );
 
-        let progress = Arc::new(Mutex::new(UploadProgress::new(to_upload.len() as u64)));
+        let progress = Arc::new(Mutex::new(UploadProgress::new(total)));
+        if skipped > 0 {
+            let mut p = progress.lock().unwrap();
+            for _ in 0..skipped {
+                p.increment_skipped("-", "-");
+            }
+        }
 
         if self.config.dry_run {
             for a in &to_upload {
                 println!(
-                    "  {} Would upload: {}:{}:{}",
+                    "  {} Would upload: {} ({} file(s))",
                     "→".blue(),
-                    a.group_id,
-                    a.artifact_id,
-                    a.version
+                    a.coordinate(),
+                    a.files.len()
                 );
                 progress
                     .lock()
@@ -332,15 +417,14 @@ impl NexusUploader {
             .upload_maven_batch(to_upload, concurrency, &progress)
             .await;
         progress.lock().unwrap().finish_with_summary();
-        result?;
-        Ok(())
+        result
     }
 
     async fn filter_existing_maven(
         self: &Arc<Self>,
         artifacts: Vec<MavenArtifact>,
         concurrency: usize,
-    ) -> Result<Vec<MavenArtifact>> {
+    ) -> Result<(Vec<MavenArtifact>, u64)> {
         let sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
         let mut tasks = JoinSet::new();
 
@@ -362,7 +446,7 @@ impl NexusUploader {
         }
 
         let mut remaining = Vec::new();
-        let mut skipped = 0usize;
+        let mut skipped = 0u64;
         while let Some(Ok((a, exists))) = tasks.join_next().await {
             if exists {
                 skipped += 1;
@@ -377,7 +461,7 @@ impl NexusUploader {
         if skipped > 0 {
             info!("Skipped {} already-existing artifacts", skipped);
         }
-        Ok(remaining)
+        Ok((remaining, skipped))
     }
 
     async fn upload_maven_batch(

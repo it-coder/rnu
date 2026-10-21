@@ -255,10 +255,8 @@ tag:
 	echo "Bumping $(VERSION) -> $$v"; \
 	sed "s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version = \"$$v\"/" Cargo.toml > Cargo.toml.tmp \
 	  && mv Cargo.toml.tmp Cargo.toml || exit 1; \
-	sed "s/^\([[:space:]]*version[[:space:]]*=[[:space:]]*\)\"[^\"]*\"/\1\"$$v\"/" src/cli.rs > src/cli.rs.tmp \
-	  && mv src/cli.rs.tmp src/cli.rs || exit 1; \
 	$(CARGO) check -q || exit 1; \
-	git add Cargo.toml Cargo.lock src/cli.rs; \
+	git add Cargo.toml Cargo.lock; \
 	git commit -m "chore: bump version to $$v"; \
 	git tag -a "v$$v" -m "Release v$$v"; \
 	echo "✓ committed and tagged v$$v"

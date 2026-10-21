@@ -1,26 +1,42 @@
 {
   "default_server": "http://localhost:8081",
-  "default_repository": "npm-hosted",
+  "default_user": "admin",
+  "repositories": {
+    "npm": "npm-hosted",
+    "maven": "maven-releases"
+  },
   "profiles": {
     "local": {
       "server": "http://localhost:8081",
-      "repository": "npm-hosted",
-      "user": "admin"
+      "user": "admin",
+      "repositories": {
+        "npm": "npm-hosted",
+        "maven": "maven-releases"
+      }
     },
     "development": {
       "server": "http://dev-nexus.company.com:8081",
-      "repository": "npm-hosted",
-      "user": "dev-user"
+      "user": "dev-user",
+      "repositories": {
+        "npm": "npm-hosted",
+        "maven": "maven-releases"
+      }
     },
     "staging": {
       "server": "https://staging-nexus.company.com",
-      "repository": "npm-private",
-      "user": "staging-deploy"
+      "user": "staging-deploy",
+      "repositories": {
+        "npm": "npm-private",
+        "maven": "maven-releases"
+      }
     },
     "production": {
       "server": "https://nexus.company.com",
-      "repository": "npm-private",
-      "user": "prod-deploy"
+      "user": "prod-deploy",
+      "repositories": {
+        "npm": "npm-private",
+        "maven": "maven-releases"
+      }
     }
   }
 }

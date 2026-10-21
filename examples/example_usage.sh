@@ -55,8 +55,8 @@ echo "Description: Shows all configured profiles"
 echo
 
 say "${GREEN}Example 4: Add a new profile${NC}"
-echo "Command: $NEXUS_UPLOAD config add staging --server https://staging-nexus.company.com --repository npm-hosted --user deploy"
-echo "Description: Adds a new profile named 'staging'"
+echo "Command: $NEXUS_UPLOAD -s https://staging-nexus.company.com -u deploy config add staging --npm-repo npm-hosted --maven-repo maven-releases"
+echo "Description: Adds a profile named 'staging' (connection flags are global)"
 echo
 
 # ── npm Upload ─────────────────────────────────────────────────────
@@ -107,24 +107,24 @@ echo
 
 say "${YELLOW}=== Maven Upload Examples ===${NC}\n"
 
-say "${GREEN}Example 13: Maven — upload target directory${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 -r maven-releases maven ./target"
-echo "Description: Scan ./target for .pom + .jar files and upload to maven-releases"
+say "${GREEN}Example 13: Maven — project mode (dependency closure)${NC}"
+echo "Command: $NEXUS_UPLOAD maven ./my-app"
+echo "Description: ./my-app contains pom.xml, so dependencies are resolved into an isolated temp repo and uploaded"
 echo
 
-say "${GREEN}Example 14: Maven — from local repository${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 maven ~/.m2/repository --skip-existing -c 4"
-echo "Description: Scan local Maven repository, skip existing artifacts, 4 concurrent uploads"
+say "${GREEN}Example 14: Maven — existing repository layout${NC}"
+echo "Command: $NEXUS_UPLOAD maven ~/.m2/repository --skip-existing -c 4"
+echo "Description: Detected as a repository layout; coordinates come from the path"
 echo
 
-say "${GREEN}Example 15: Maven — filter by artifactId${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 -r maven-releases maven ./target --only \"my-app,my-lib\""
-echo "Description: Only upload artifacts whose artifactId contains my-app or my-lib"
+say "${GREEN}Example 15: Maven — loose POM directory${NC}"
+echo "Command: $NEXUS_UPLOAD maven ./target --layout loose"
+echo "Description: Scan ./target for flat .pom + .jar files (override the auto-detection)"
 echo
 
 say "${GREEN}Example 16: Maven — dry-run preview${NC}"
-echo "Command: $NEXUS_UPLOAD --profile local -p password123 maven ./target --dry-run -v"
-echo "Description: Scan and show what Maven artifacts would be uploaded"
+echo "Command: $NEXUS_UPLOAD maven ./my-app --dry-run -v"
+echo "Description: Detect the layout and show what would be uploaded"
 echo
 
 # ── Common Use Cases ───────────────────────────────────────────────
@@ -133,30 +133,31 @@ say "${YELLOW}=== Common Use Cases ===${NC}\n"
 
 say "${BLUE}Use Case 1: Initial setup for new environment${NC}"
 cat << 'EOF'
-# 1. Initialize configuration
+# 1. Initialize configuration (interactive: server / user / repos / password)
 nexus-upload config init
 
-# 2. Add your environment profile
-nexus-upload config add myenv --server https://nexus.mycompany.com --repository npm-private --user myuser
+# 2. Or add an environment profile with global flags
+nexus-upload -s https://nexus.mycompany.com -u myuser config add myenv --npm-repo npm-private
 
 # 3. Test with dry run (npm)
-nexus-upload --profile myenv -p mypassword npm ./my-project --dry-run
+export RNU_PASSWORD=your_password
+nexus-upload --profile myenv npm ./my-project --dry-run
 
 # 4. Upload with skip existing + concurrency
-nexus-upload --profile myenv -p mypassword npm ./my-project --skip-existing -c 8
+nexus-upload --profile myenv npm ./my-project --skip-existing -c 8
 EOF
 echo
 
 say "${BLUE}Use Case 2: Offline environment deployment (npm)${NC}"
 cat << 'EOF'
 # 1. Scan and show what would be uploaded
-nexus-upload --profile production -p password npm ./offline-project --dry-run -v
+nexus-upload --profile production npm ./offline-project --dry-run -v
 
 # 2. Upload production dependencies only
-nexus-upload --profile production -p password npm ./offline-project --exclude "test,dev,mock" -c 8
+nexus-upload --profile production npm ./offline-project --exclude "test,dev,mock" -c 8
 
 # 3. Upload remaining packages
-nexus-upload --profile production -p password npm ./offline-project --skip-existing
+nexus-upload --profile production npm ./offline-project --skip-existing
 EOF
 echo
 
@@ -165,14 +166,14 @@ cat << 'EOF'
 # 1. Build your project
 mvn clean package
 
-# 2. Preview upload
-nexus-upload --profile nexus -p $PASSWORD -r maven-releases maven ./target --dry-run
+# 2. Preview upload (layout is detected automatically)
+nexus-upload maven ./target --dry-run
 
 # 3. Upload with concurrency
-nexus-upload --profile nexus -p $PASSWORD -r maven-releases maven ./target -c 8
+nexus-upload maven ./target -c 8
 
 # 4. Upload snapshots
-nexus-upload --profile nexus -p $PASSWORD -r maven-snapshots maven ./target --skip-existing
+nexus-upload maven ./target -r maven-snapshots --skip-existing
 EOF
 echo
 
@@ -180,14 +181,15 @@ echo
 
 say "${YELLOW}=== Security Best Practices ===${NC}\n"
 
-echo "1. Never store passwords in configuration files"
-echo "2. Use environment variables for passwords:"
-echo "   export NEXUS_PASSWORD=your_password"
-echo "   nexus-upload --profile local -p \$NEXUS_PASSWORD npm ./project"
+echo "1. Prefer the environment variable over flags — it never shows up in ps or shell history:"
+echo "   export RNU_PASSWORD=your_password"
+echo "   nexus-upload --profile local npm ./project"
 echo
-echo "3. Use secure password prompts in CI/CD:"
-echo "   read -s NEXUS_PASSWORD"
-echo "   nexus-upload --profile prod -p \$NEXUS_PASSWORD npm ./project"
+echo "2. In CI, inject the secret from the pipeline's secret store:"
+echo "   RNU_PASSWORD=\"\$NEXUS_TOKEN\" nexus-upload --profile prod maven ./my-app"
+echo
+echo "3. If you let 'config init' store the password, the file is mode 600;"
+echo "   'config show' always masks it. Still prefer RNU_PASSWORD on shared machines."
 echo
 
 # ── Troubleshooting ────────────────────────────────────────────────

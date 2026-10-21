@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
 
+use super::maven::MavenFile;
+
 /// HTTP client for Nexus Repository Manager REST API.
 ///
 /// Wraps `reqwest::Client` with Basic auth and Nexus-specific endpoints.
@@ -204,12 +206,16 @@ impl NexusClient {
     }
 
     /// Upload a Maven component with its files.
+    ///
+    /// `classifier` is `None` for the main artifact; sending it explicitly is
+    /// what keeps `-sources` / `-javadoc` jars from being stored as the main
+    /// jar of the component.
     pub async fn upload_maven_component(
         &self,
         group_id: &str,
         artifact_id: &str,
         version: &str,
-        files: &[(PathBuf, String)],
+        files: &[MavenFile],
     ) -> Result<()> {
         let url = format!(
             "{}/service/rest/v1/components?repository={}",
@@ -223,19 +229,27 @@ impl NexusClient {
             .text("maven2.artifactId", artifact_id.to_string())
             .text("maven2.version", version.to_string());
 
-        for (i, (path, ext)) in files.iter().enumerate() {
+        for (i, file) in files.iter().enumerate() {
             let idx = i + 1;
-            let data = std::fs::read(path)?;
-            let fname = path
+            let data = std::fs::read(&file.path)?;
+            let fname = file
+                .path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown");
             let part = reqwest::multipart::Part::bytes(data)
                 .file_name(fname.to_string())
                 .mime_str("application/octet-stream")?;
-            form = form
-                .part(format!("maven2.asset{}", idx), part)
-                .text(format!("maven2.asset{}.extension", idx), ext.clone());
+            form = form.part(format!("maven2.asset{}", idx), part).text(
+                format!("maven2.asset{}.extension", idx),
+                file.extension.clone(),
+            );
+            if let Some(classifier) = &file.classifier {
+                form = form.text(
+                    format!("maven2.asset{}.classifier", idx),
+                    classifier.clone(),
+                );
+            }
         }
 
         let response = self
