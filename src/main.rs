@@ -84,14 +84,15 @@ async fn run(cli: Cli) -> Result<()> {
             layout,
             with_project,
             keep_repo,
+            fresh,
             mvn,
         } => {
             let layout = resolve_layout(path, *layout)?;
             // --mvn is harmless for non-project layouts (and may come from
             // RNU_MVN), so only the options that change behaviour are rejected.
-            if layout != MavenLayout::Project && (*with_project || keep_repo.is_some()) {
+            if layout != MavenLayout::Project && (*with_project || keep_repo.is_some() || *fresh) {
                 return Err(RnuError::ConfigError(
-                    "--with-project / --keep-repo only apply to a project source \
+                    "--with-project / --keep-repo / --fresh only apply to a project source \
                      (a directory containing pom.xml, or --layout project)"
                         .to_string(),
                 ));
@@ -122,6 +123,7 @@ async fn run(cli: Cli) -> Result<()> {
                             dir,
                             *with_project,
                             keep_repo.clone(),
+                            *fresh,
                             mvn.clone(),
                             cli.skip_existing,
                             filter_options,

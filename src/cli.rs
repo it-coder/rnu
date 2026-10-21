@@ -140,9 +140,13 @@ pub enum Commands {
         #[arg(long)]
         with_project: bool,
 
-        /// Project mode: reuse a persistent repository directory instead of a temporary one
+        /// Project mode: reuse a persistent repository directory instead of the cache
         #[arg(long, value_name = "DIR")]
         keep_repo: Option<PathBuf>,
+
+        /// Project mode: ignore the cached repository and resolve from scratch
+        #[arg(long)]
+        fresh: bool,
 
         /// Project mode: mvn executable to use
         #[arg(long, value_name = "PATH", env = "RNU_MVN")]

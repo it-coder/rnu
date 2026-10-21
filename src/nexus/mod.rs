@@ -305,13 +305,16 @@ impl NexusUploader {
     /// repository, then upload everything that landed there.
     ///
     /// The isolated repo is what keeps unrelated projects out: only artifacts
-    /// this project actually resolved are uploaded.
+    /// this project actually resolved are uploaded. It is cached per project
+    /// (keyed by path, invalidated when `pom.xml` changes) so a second run does
+    /// not download the whole closure again.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_maven_project(
         self: Arc<Self>,
         project: PathBuf,
         with_project: bool,
         keep_repo: Option<PathBuf>,
+        fresh: bool,
         mvn_bin: Option<PathBuf>,
         skip_existing: bool,
         filter_options: FilterOptions,
@@ -321,24 +324,45 @@ impl NexusUploader {
             info!("Resolving project (install) into an isolated repository");
         }
 
-        // Keep the TempDir alive until the upload finishes.
-        let temp_dir;
-        let repo_path: PathBuf = match keep_repo {
+        let (repo_path, reused) = match keep_repo {
             Some(ref dir) => {
                 fs::create_dir_all(dir)?;
                 warn!(
                     "Reusing {} — it may still contain artifacts resolved by earlier runs",
                     dir.display()
                 );
-                dir.clone()
+                (dir.clone(), true)
             }
             None => {
-                temp_dir = tempfile::Builder::new().prefix("rnu-m2-").tempdir()?;
-                temp_dir.path().to_path_buf()
+                let cache = crate::mvn::prepare_repo(&project, fresh)?;
+                (cache.dir, cache.reused)
             }
         };
 
-        crate::mvn::resolve_dependencies(&project, &repo_path, with_project, mvn_bin.as_deref())?;
+        println!(
+            "{} {} {}",
+            if reused {
+                "Cache:".dimmed()
+            } else {
+                "Repository:".dimmed()
+            },
+            repo_path.display(),
+            if reused {
+                "(reused — pass --fresh to re-resolve)".dimmed().to_string()
+            } else {
+                "(first run downloads the dependency closure)"
+                    .dimmed()
+                    .to_string()
+            }
+        );
+
+        let elapsed = crate::mvn::resolve_dependencies(
+            &project,
+            &repo_path,
+            with_project,
+            mvn_bin.as_deref(),
+            self.config.verbose,
+        )?;
 
         let all = MavenRepoScanner::scan(&repo_path)?;
         if all.is_empty() {
@@ -348,6 +372,13 @@ impl NexusUploader {
             );
             return Ok(());
         }
+
+        println!(
+            "{} Resolved {} artifact(s) in {:.1}s",
+            "✓".green().bold(),
+            all.len(),
+            elapsed.as_secs_f64()
+        );
 
         self.upload_artifacts(all, skip_existing, filter_options, concurrency)
             .await
