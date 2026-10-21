@@ -137,7 +137,7 @@ CLI 参数  >  环境变量（RNU_SERVER/USER/PASSWORD/REPO）  >  --profile  > 
 ### 项目模式：解析与缓存（`src/mvn.rs`）
 
 ```
-prepare_repo(project, fresh)  →  <cache_dir>/rnu/m2/<hash(project 绝对路径)>
+prepare_repo(project, fresh)  →  ./.rnu/m2/<hash(project 绝对路径)>
 resolve_dependencies(...)     →  mvn -B -Dmaven.repo.local=<dir> dependency:go-offline
                                  （--with-project 时改 install -DskipTests）
 ```
@@ -150,7 +150,8 @@ resolve_dependencies(...)     →  mvn -B -Dmaven.repo.local=<dir> dependency:go
 - **缓存按项目**（`DefaultHasher` 哈希项目绝对路径，跨进程稳定），`pom.xml` 内容哈希写在
   `<root>/<key>.pom`，不一致就整目录重建——否则改完版本号，旧版本构件会被当成"本项目依赖"上传。
   `--fresh` 强制重解，`--keep-repo <dir>` 用指定目录替代默认缓存。
-- 缓存目录取不到时（`dirs::cache_dir()` 为 None）退回 `TempDir`，`RepoCache::_temp` 负责保命。
+- 缓存根是**当前工作目录**下的 `.rnu/m2`（`CACHE_DIR_NAME`），与 `config.toml` 同级：换工作目录即换缓存，
+  `rm -rf .rnu` 即回收空间。当前目录不可写时退回 `TempDir` 并 warn，`RepoCache::_temp` 负责保命。
 
 ---
 

@@ -14,7 +14,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tar::Builder;
 use tokio::task::JoinSet;
@@ -346,7 +346,7 @@ impl NexusUploader {
             } else {
                 "Repository:".dimmed()
             },
-            repo_path.display(),
+            display_path(&repo_path),
             if reused {
                 "(reused — pass --fresh to re-resolve)".dimmed().to_string()
             } else {
@@ -650,6 +650,22 @@ impl NexusUploader {
             format!("{}/-/{}-{}.tgz", name, name, version)
         }
     }
+}
+
+// ── helpers ───────────────────────────────────────────────────────
+
+/// Render paths under the working directory relative to it.
+///
+/// The Maven cache now lives in `./.rnu/…`, so echoing a 60-character absolute
+/// path on every run is just noise; anything outside the working directory
+/// (e.g. `--keep-repo /elsewhere`) still prints in full.
+fn display_path(path: &Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(cwd).ok().map(Path::to_path_buf))
+        .unwrap_or_else(|| path.to_path_buf())
+        .display()
+        .to_string()
 }
 
 // ── tests ─────────────────────────────────────────────────────────

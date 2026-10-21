@@ -18,7 +18,7 @@ RNU (Rust Nexus Uploader) 是一个基于 Rust 开发的 CLI 工具，支持将 
 ### Maven 构件上传
 单一位置参数，布局自动识别（`--layout` 可覆盖）：
 
-- **项目模式**（目录含 `pom.xml`，或直接传该文件）：`mvn -B -Dmaven.repo.local=<项目缓存仓库> dependency:go-offline` → 扫描该仓库 → 上传（缓存按项目隔离，pom.xml 变更即失效）。隔离仓库保证只带上本项目实际解析到的依赖，`~/.m2` 里其他项目不受影响；`--with-project` 改用 `install` 纳入本项目产物
+- **项目模式**（目录含 `pom.xml`，或直接传该文件）：`mvn -B -Dmaven.repo.local=./.rnu/m2/<项目哈希> dependency:go-offline` → 扫描该仓库 → 上传（缓存在当前目录、按项目隔离，pom.xml 变更即失效）。隔离仓库保证只带上本项目实际解析到的依赖，`~/.m2` 里其他项目不受影响；`--with-project` 改用 `install` 纳入本项目产物
 - **仓库布局**（`<group>/<artifact>/<version>/…`）：坐标取自路径，**不解析 XML**；classifier 取自文件名，版本边界严格（`foo:1.0` 不会收进 `foo-1.0.1.jar`）
 - **松散目录**（其它含 `.pom` 的目录）：递归找 `.pom` → quick-xml 解析坐标（支持 `<parent>` 继承）→ 匹配同目录伴生文件
 

@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Where the isolated repository for a project lives, and whether it already
 /// held a previous resolution.
@@ -191,21 +191,41 @@ fn summarise(line: &str) -> String {
     out
 }
 
+/// Directory, relative to the working directory, that holds the repository
+/// cache. It sits next to `config.toml` so one `rm -rf` cleans up both, and so
+/// the artifacts a run may upload never accumulate in the user's home.
+pub const CACHE_DIR_NAME: &str = ".rnu";
+
 /// Per-project cache directory, so a second run does not download everything
 /// again. One directory per project keeps the "only this project's artifacts"
 /// promise intact.
+///
+/// The cache lives under the **current directory** rather than the platform
+/// cache dir: a run is usually tied to one workspace, and keeping the closure
+/// next to the project makes it obvious what is on disk and how to reclaim it.
 pub fn prepare_repo(project: &Path, fresh: bool) -> Result<RepoCache> {
-    let Some(cache) = dirs::cache_dir() else {
-        // No cache directory: fall back to a throwaway directory rather than
-        // failing the run.
-        let temp = tempfile::Builder::new().prefix("rnu-m2-").tempdir()?;
-        return Ok(RepoCache {
-            dir: temp.path().to_path_buf(),
-            reused: false,
-            _temp: Some(temp),
-        });
-    };
-    prepare_repo_in(&cache.join("rnu").join("m2"), project, fresh)
+    let cwd = std::env::current_dir().map_err(|e| {
+        RnuError::ConfigError(format!("Could not determine the current directory: {e}"))
+    })?;
+
+    match prepare_repo_in(&cache_root(&cwd), project, fresh) {
+        Ok(cache) => Ok(cache),
+        Err(err) => {
+            // A read-only working directory should not fail the upload; the
+            // cache is an optimisation, so fall back to a throwaway repo.
+            warn!("{err} — using a temporary repository instead (nothing will be cached)");
+            let temp = tempfile::Builder::new().prefix("rnu-m2-").tempdir()?;
+            Ok(RepoCache {
+                dir: temp.path().to_path_buf(),
+                reused: false,
+                _temp: Some(temp),
+            })
+        }
+    }
+}
+
+fn cache_root(cwd: &Path) -> PathBuf {
+    cwd.join(CACHE_DIR_NAME).join("m2")
 }
 
 fn prepare_repo_in(root: &Path, project: &Path, fresh: bool) -> Result<RepoCache> {
@@ -405,6 +425,12 @@ mod tests {
     fn same_project_always_maps_to_the_same_key() {
         let project = tempdir().unwrap();
         assert_eq!(project_key(project.path()), project_key(project.path()));
+    }
+
+    #[test]
+    fn cache_root_lives_under_the_working_directory() {
+        let cwd = tempdir().unwrap();
+        assert_eq!(cache_root(cwd.path()), cwd.path().join(".rnu").join("m2"));
     }
 
     #[test]

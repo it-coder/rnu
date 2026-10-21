@@ -115,7 +115,11 @@ mvn -B -Dmaven.repo.local=<缓存目录> dependency:go-offline
 
 坐标来自路径而不是解析 XML，因此 `-sources.jar` / `-javadoc.jar` 会带上正确的 classifier，不会冒充主 jar。
 
-**仓库按项目缓存**：默认落在 `~/Library/Caches/rnu/m2/<项目哈希>`（Linux `~/.cache/rnu/m2/…`），第二次运行直接复用，不用重新下载几百 MB。`pom.xml` 内容一变就自动作废重解（避免旧版本构件被当成「本项目依赖」上传）；`--fresh` 强制重解，`--keep-repo <dir>` 指定自己的目录，删掉缓存目录即可回收空间。
+**仓库按项目缓存**：落在**当前目录**的 `.rnu/m2/<项目哈希>`，和 `config.toml` 放在一起——换工作目录就是换一套缓存，`rm -rf .rnu` 即可回收全部空间，也不会往家目录里堆东西。第二次运行直接复用，不用重新下载几百 MB。
+
+`pom.xml` 内容一变就自动作废重解（避免旧版本构件被当成「本项目依赖」上传）；`--fresh` 强制重解；`--keep-repo <dir>` 用固定目录替代 `.rnu/m2/<hash>`（想跨工作目录共享缓存时用，注意它会跨项目累积构件）。当前目录不可写时退回临时目录并给出提示，本次不上传缓存。
+
+在项目根目录跑的话，记得把 `.rnu/` 加进该项目的 `.gitignore`。
 
 首次解析会下载整个闭包（Spring Boot 系项目通常几百 MB、几分钟），期间 spinner 会显示 `Downloading from …`，不是卡死。
 
@@ -167,7 +171,7 @@ nexus-upload maven <PATH> [--layout auto|project|repo|loose]
 | 选项 | 说明 |
 |---|---|
 | `--with-project` | 连本项目产物一起传（`install` 而非 `go-offline`） |
-| `--keep-repo <DIR>` | 用指定目录替代默认缓存目录 |
+| `--keep-repo <DIR>` | 用指定目录替代 `.rnu/m2/<hash>` |
 | `--fresh` | 忽略缓存，强制重新解析依赖 |
 | `--mvn <PATH>` | 指定 `mvn` 可执行文件（也支持 `RNU_MVN`） |
 
